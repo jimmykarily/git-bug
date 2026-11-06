@@ -128,9 +128,10 @@ func runPrReviewEditor(env *execenv.Env, pr *cache.PullRequestCache, verdict pul
 	if err != nil {
 		return err
 	}
-	// Nothing written beyond the preset verdict, whatever whitespace the
-	// editor changed, means the reviewer gave up.
-	if name == "" || (name == verdict.String() && summary == "" && len(targets) == 0) {
+	// No summary and no comment, with the preset verdict or a plain comment,
+	// means the reviewer gave up.
+	if name == "" || (summary == "" && len(targets) == 0 &&
+		(name == verdict.String() || name == pullrequest.CommentVerdict.String())) {
 		env.Out.Println("Empty review, aborting.")
 		return nil
 	}

@@ -95,6 +95,7 @@ func TestPrReviewEditor(t *testing.T) {
 		"unchanged template":         {commands: "true"},
 		"only the verdict":           {commands: `echo comment > "$1"`},
 		"unchanged approve template": {opts: prReviewOptions{approve: true}, commands: "true"},
+		"approve changed to comment": {opts: prReviewOptions{approve: true}, commands: `echo comment > "$1"`},
 		"whitespace stripped":        {opts: prReviewOptions{approve: true}, commands: `c=$(sed 's/[ \t]*$//' "$1"); printf '%s' "$c" > "$1"`},
 	} {
 		t.Run(name, func(t *testing.T) {

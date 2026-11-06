@@ -42,6 +42,8 @@ func TestReviewTemplate(t *testing.T) {
 # First line: comment, approve or request-changes.
 # Text before the diff is the summary. Write a comment on the line(s) right
 # under the diff line it is about. Lines starting with # are ignored.
+# You may delete whole files, whole hunks, or the end of a hunk, and must keep
+# the other quoted lines as they are.
 approve
 
 > diff --git a/old.go b/main.go
@@ -112,6 +114,7 @@ Nice work.
 Second line of the summary.
 
 > diff --git a/new.go b/new.go
+> @@ -0,0 +1,2 @@
 > +hello
 first line
 second line
@@ -128,7 +131,7 @@ second line
 	})
 
 	t.Run("paragraphs form one comment", func(t *testing.T) {
-		text := "comment\n> +hello\nfirst paragraph\n\n\nsecond paragraph\n\n> +world\n"
+		text := "comment\n> +++ b/new.go\n> @@ -0,0 +1,2 @@\n> +hello\nfirst paragraph\n\n\nsecond paragraph\n\n> +world\n"
 		_, _, comments, err := parseReview(text, files)
 		require.NoError(t, err)
 		require.Equal(t, []lineTarget{
@@ -136,19 +139,36 @@ second line
 		}, comments)
 	})
 
-	t.Run("deleted quoted lines", func(t *testing.T) {
+	t.Run("whole first file and a hunk tail deleted", func(t *testing.T) {
 		text := `request-changes
-> -line two
 > diff --git a/new.go b/new.go
-> +world
-needs a newline
+> new file mode 100644
+> --- /dev/null
+> +++ b/new.go
+> @@ -0,0 +1,2 @@
+> +hello
+say hello to whom
 `
 		verdict, _, comments, err := parseReview(text, files)
 		require.NoError(t, err)
 		require.Equal(t, "request-changes", verdict)
 		require.Equal(t, []lineTarget{
-			{Path: "new.go", NewLine: 2, Message: "needs a newline"},
+			{Path: "new.go", NewLine: 1, Message: "say hello to whom"},
 		}, comments)
+	})
+
+	t.Run("deleted file", func(t *testing.T) {
+		gone := []repository.FileDiff{{
+			Path:     "gone.go",
+			IsDelete: true,
+			Hunks: []repository.DiffHunk{{OldStart: 1, OldLines: 1, NewStart: 0, NewLines: 0, Lines: []repository.DiffLine{
+				{Type: repository.DiffLineDeleted, Content: "bye", OldLine: 1},
+			}}},
+		}}
+		text := reviewTemplate("0c8c916", "Add X", "feature", "trunk", head, pullrequest.CommentVerdict, gone) + "why remove it\n"
+		_, _, comments, err := parseReview(text, gone)
+		require.NoError(t, err)
+		require.Equal(t, []lineTarget{{Path: "gone.go", OldLine: 1, Message: "why remove it"}}, comments)
 	})
 
 	t.Run("blank context line with trailing spaces stripped", func(t *testing.T) {
@@ -160,7 +180,7 @@ needs a newline
 				{Type: repository.DiffLineContext, Content: "y", OldLine: 2, NewLine: 3},
 			}}},
 		}}
-		_, _, comments, err := parseReview("comment\n>\nwhy blank\n", blank)
+		_, _, comments, err := parseReview("comment\n> diff --git a/a.go b/a.go\n> @@ -1,2 +1,3 @@\n>\nwhy blank\n", blank)
 		require.NoError(t, err)
 		require.Equal(t, []lineTarget{{Path: "a.go", OldLine: 1, NewLine: 1, Message: "why blank"}}, comments)
 	})
@@ -177,9 +197,33 @@ needs a newline
 			text: "comment\n\n> diff --git a/new.go b/new.go\nhere\n",
 			err:  "line 4: a comment must be under a line of the diff, not under a file or hunk header",
 		},
-		"comment under a typed line": {
-			text: "comment\n> diff --git a/new.go b/new.go\n> +not in the diff\nhere\n",
-			err:  "line 4: the comment is not under a line of the diff",
+		"line typed inside a hunk": {
+			text: "comment\n> diff --git a/new.go b/new.go\n> @@ -0,0 +1,2 @@\n> +not in the diff\nhere\n",
+			err:  "line 4: " + keepHunkLines,
+		},
+		"line deleted in the middle of a hunk": {
+			text: "comment\n> +++ b/main.go\n> @@ -1,2 +1,2 @@\n> -line two\nwhy\n",
+			err:  "line 4: " + keepHunkLines,
+		},
+		"code line without a hunk header": {
+			text: "comment\n> diff --git a/new.go b/new.go\n> +hello\nhere\n",
+			err:  "line 3: a quoted line of code needs its file and hunk header above it",
+		},
+		"unknown file": {
+			text: "comment\n> diff --git a/other.go b/other.go\n",
+			err:  "line 2: this file is not in the diff",
+		},
+		"unknown hunk": {
+			text: "comment\n> +++ b/new.go\n> @@ -0,0 +1,3 @@\n",
+			err:  "line 3: this hunk header is not in the diff of new.go",
+		},
+		"deleted file selected by +++ /dev/null": {
+			text: "comment\n> +++ /dev/null\n",
+			err:  "line 2: a quoted line of code needs its file and hunk header above it",
+		},
+		"hunk header without a file header": {
+			text: "comment\n> @@ -0,0 +1,2 @@\n",
+			err:  "line 2: this hunk header has no file header above it",
 		},
 		"unknown verdict": {
 			text: "lgtm\n",
@@ -205,42 +249,35 @@ needs a newline
 	})
 }
 
+const keepHunkLines = "quoted lines inside a hunk must be kept as they are; you may delete whole files, whole hunks, or the end of a hunk"
+
 func TestParseReviewRepeatedLine(t *testing.T) {
-	file := func(path, first string) repository.FileDiff {
+	file := func(path string) repository.FileDiff {
 		return repository.FileDiff{
 			Path: path,
-			Hunks: []repository.DiffHunk{{OldStart: 1, OldLines: 1, NewStart: 1, NewLines: 2, Lines: []repository.DiffLine{
-				{Type: repository.DiffLineContext, Content: first, OldLine: 1, NewLine: 1},
+			Hunks: []repository.DiffHunk{{OldStart: 1, OldLines: 1, NewStart: 1, NewLines: 3, Lines: []repository.DiffLine{
+				{Type: repository.DiffLineContext, Content: "func f() error {", OldLine: 1, NewLine: 1},
 				{Type: repository.DiffLineAdded, Content: "\treturn nil", NewLine: 2},
+				{Type: repository.DiffLineAdded, Content: "}", NewLine: 3},
 			}}},
 		}
 	}
-	twoFiles := []repository.FileDiff{file("a.go", "func a() error {"), file("b.go", "func b() error {")}
+	twoFiles := []repository.FileDiff{file("a.go"), file("b.go")}
 
-	t.Run("in two files", func(t *testing.T) {
-		_, _, _, err := parseReview("comment\n> +\treturn nil\nwrap the error\n", twoFiles)
-		require.EqualError(t, err, "line 2: this line appears more than once in the diff; keep its file and hunk header above it")
-	})
-
-	t.Run("in two files with its headers kept", func(t *testing.T) {
-		text := "comment\n> +++ b/b.go\n> @@ -1,1 +1,2 @@\n> +\treturn nil\nwrap the error\n"
+	t.Run("headers kept", func(t *testing.T) {
+		text := "comment\n> +++ b/b.go\n> @@ -1,1 +1,3 @@\n>  func f() error {\n> +\treturn nil\nwrap the error\n> +}\n"
 		_, _, comments, err := parseReview(text, twoFiles)
 		require.NoError(t, err)
 		require.Equal(t, []lineTarget{{Path: "b.go", NewLine: 2, Message: "wrap the error"}}, comments)
 	})
 
-	t.Run("in one hunk with the earlier copy deleted", func(t *testing.T) {
-		oneHunk := []repository.FileDiff{{
-			Path: "a.go",
-			Hunks: []repository.DiffHunk{{OldStart: 0, OldLines: 0, NewStart: 1, NewLines: 4, Lines: []repository.DiffLine{
-				{Type: repository.DiffLineAdded, Content: "a", NewLine: 1},
-				{Type: repository.DiffLineAdded, Content: "x", NewLine: 2},
-				{Type: repository.DiffLineAdded, Content: "y", NewLine: 3},
-				{Type: repository.DiffLineAdded, Content: "x", NewLine: 4},
-			}}},
-		}}
-		text := "comment\n> @@ -0,0 +1,4 @@\n> +x\nwhich x\n"
-		_, _, _, err := parseReview(text, oneHunk)
-		require.EqualError(t, err, "line 3: this line appears more than once in the diff; keep its file and hunk header above it")
-	})
+	for name, text := range map[string]string{
+		"one line":  "comment\n> +\treturn nil\nwrap the error\n",
+		"two lines": "comment\n>  func f() error {\n> +\treturn nil\nwrap the error\n",
+	} {
+		t.Run(name+" without headers", func(t *testing.T) {
+			_, _, _, err := parseReview(text, twoFiles)
+			require.EqualError(t, err, "line 2: a quoted line of code needs its file and hunk header above it")
+		})
+	}
 }

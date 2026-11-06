@@ -17,6 +17,8 @@ const reviewTemplateHeader = `# Review of %s %q (%s -> %s, head %s)
 # First line: comment, approve or request-changes.
 # Text before the diff is the summary. Write a comment on the line(s) right
 # under the diff line it is about. Lines starting with # are ignored.
+# You may delete whole files, whole hunks, or the end of a hunk, and must keep
+# the other quoted lines as they are.
 %s
 
 `
@@ -39,17 +41,23 @@ func reviewTemplate(id, title, source, target string, head repository.Hash, verd
 	return buf.String()
 }
 
-// quotedLine is one line of the diff as written in the template, without its
-// quote. target is nil for file and hunk header lines.
-type quotedLine struct {
-	text   string
-	target *lineTarget
+// renderedFile is one file of the diff as writeUnifiedDiff writes it.
+type renderedFile struct {
+	path    string
+	headers []string // the file header lines, from "diff --git" on
+	hunks   []renderedHunk
 }
 
-// quotedLines returns the lines writeUnifiedDiff writes for files, each with
-// the position a comment under it would have.
-func quotedLines(files []repository.FileDiff) []quotedLine {
-	var res []quotedLine
+// renderedHunk is a hunk header line and the code lines under it, each with
+// the position a comment under it has.
+type renderedHunk struct {
+	header string
+	lines  []string
+	target []lineTarget
+}
+
+func renderFiles(files []repository.FileDiff) []renderedFile {
+	res := make([]renderedFile, 0, len(files))
 	for _, f := range files {
 		var buf bytes.Buffer
 		writeUnifiedDiff(&buf, []repository.FileDiff{f}, "")
@@ -61,71 +69,68 @@ func quotedLines(files []repository.FileDiff) []quotedLine {
 		for _, h := range f.Hunks {
 			headers -= 1 + len(h.Lines)
 		}
-		for _, l := range rendered[:headers] {
-			res = append(res, quotedLine{text: l})
-		}
+		rf := renderedFile{path: f.Path, headers: rendered[:headers]}
 		i := headers
 		for _, h := range f.Hunks {
-			res = append(res, quotedLine{text: rendered[i]})
+			rh := renderedHunk{header: rendered[i]}
 			i++
 			for _, l := range h.Lines {
-				target := &lineTarget{Path: f.Path, OldLine: l.OldLine, NewLine: l.NewLine}
+				target := lineTarget{Path: f.Path, OldLine: l.OldLine, NewLine: l.NewLine}
 				if f.OldPath != nil && l.OldLine > 0 {
 					target.OldPath = *f.OldPath
 				}
-				res = append(res, quotedLine{text: rendered[i], target: target})
+				rh.lines = append(rh.lines, rendered[i])
+				rh.target = append(rh.target, target)
 				i++
 			}
+			rf.hunks = append(rf.hunks, rh)
 		}
+		res = append(res, rf)
 	}
 	return res
 }
 
 // parseReview reads the text edited from reviewTemplate. The first line that
 // is not a # comment is the verdict, unquoted text before the diff is the
-// summary, and unquoted text under a quoted diff line, up to the next quoted
-// line, is a comment on that line. Each quoted line is matched with the next
-// identical line of the diff computed from files, so the reviewer may delete
-// quoted lines, and a quoted line that is not in files cannot be commented on.
+// summary, and unquoted text under a quoted code line, up to the next quoted
+// line, is a comment on that line.
+//
+// Quoted lines are placed by their headers: a "diff --git" or "+++" line
+// selects a file of the diff, a hunk header selects a hunk of that file, and
+// the lines under it must follow that hunk exactly. So the reviewer may delete
+// whole files, whole hunks or the end of a hunk, and anything else is an error.
 // The verdict is empty when the text holds nothing but # comments and blank
 // lines.
 func parseReview(edited string, files []repository.FileDiff) (verdict, summary string, comments []lineTarget, err error) {
-	diff := quotedLines(files)
-	next := 0 // index in diff of the first line not matched yet
-
-	// match is a quoted line found in diff at index, with skipped set when
-	// lines of diff before it were deleted by the reviewer.
-	type match struct {
-		lineNumber int
-		index      int
-		skipped    bool
-	}
-	var matches []match
-	// commented holds the position in matches of each comment's quoted line.
-	var commented []int
+	diff := renderFiles(files)
+	var file *renderedFile
+	var hunk *renderedHunk
+	next := 0 // index in hunk.lines of the next expected line
 
 	const (
 		beforeDiff = iota
 		underHeader
-		underUnknown
 		underLine
 	)
 	state := beforeDiff
-	var current *lineTarget
+	var current lineTarget
 	var summaryLines []string
 	var message []string
 
 	endComment := func() {
 		if len(message) > 0 {
-			c := *current
+			c := current
 			c.Message = text.Cleanup(strings.Join(message, "\n"))
 			comments = append(comments, c)
-			commented = append(commented, len(matches)-1)
 			message = nil
 		}
 	}
 
 	for i, line := range strings.Split(edited, "\n") {
+		lineErr := func(format string, args ...any) error {
+			return fmt.Errorf("line %d: "+format, append([]any{i + 1}, args...)...)
+		}
+
 		if strings.HasPrefix(line, "#") {
 			continue
 		}
@@ -145,20 +150,51 @@ func parseReview(edited string, files []repository.FileDiff) (verdict, summary s
 
 		if strings.HasPrefix(line, ">") {
 			endComment()
-			quoted := strings.TrimRight(strings.TrimPrefix(line, ">"), " \t\r")
-			quoted = strings.TrimPrefix(quoted, " ")
-			state = underUnknown
-			for j := next; j < len(diff); j++ {
-				if trimmed(diff[j]) == quoted {
-					matches = append(matches, match{lineNumber: i + 1, index: j, skipped: j > next})
-					next = j + 1
-					current = diff[j].target
-					state = underHeader
-					if current != nil {
-						state = underLine
+			quoted := strings.TrimPrefix(trimRight(strings.TrimPrefix(line, ">")), " ")
+			state = underHeader
+
+			switch {
+			case hunk != nil && next < len(hunk.lines) && trimRight(hunk.lines[next]) == quoted:
+				current = hunk.target[next]
+				next++
+				state = underLine
+
+			case strings.HasPrefix(quoted, "diff --git "), strings.HasPrefix(quoted, "+++ b/"):
+				file, hunk = nil, nil
+				for j := range diff {
+					if slicesContainsTrimmed(diff[j].headers, quoted) {
+						file = &diff[j]
+						break
 					}
-					break
 				}
+				if file == nil {
+					return "", "", nil, lineErr("this file is not in the diff")
+				}
+
+			case strings.HasPrefix(quoted, "@@ "):
+				if file == nil {
+					return "", "", nil, lineErr("this hunk header has no file header above it")
+				}
+				hunk = nil
+				for j := range file.hunks {
+					if trimRight(file.hunks[j].header) == quoted {
+						hunk = &file.hunks[j]
+						next = 0
+						break
+					}
+				}
+				if hunk == nil {
+					return "", "", nil, lineErr("this hunk header is not in the diff of %s", file.path)
+				}
+
+			case hunk != nil:
+				return "", "", nil, lineErr("quoted lines inside a hunk must be kept as they are; you may delete whole files, whole hunks, or the end of a hunk")
+
+			case file != nil && slicesContainsTrimmed(file.headers, quoted):
+				// another header line of the selected file
+
+			default:
+				return "", "", nil, lineErr("a quoted line of code needs its file and hunk header above it")
 			}
 			continue
 		}
@@ -176,44 +212,30 @@ func parseReview(edited string, files []repository.FileDiff) (verdict, summary s
 				continue
 			}
 			message = append(message, line)
-		default:
+		case underHeader:
 			if strings.TrimSpace(line) == "" {
 				continue
 			}
-			if state == underHeader {
-				return "", "", nil, fmt.Errorf("line %d: a comment must be under a line of the diff, not under a file or hunk header", i+1)
-			}
-			return "", "", nil, fmt.Errorf("line %d: the comment is not under a line of the diff", i+1)
+			return "", "", nil, lineErr("a comment must be under a line of the diff, not under a file or hunk header")
 		}
 	}
 	endComment()
 
-	// After deleted lines, the greedy match is a guess. It is refused when
-	// the same text comes again before the next quoted line's match, since
-	// the reviewer may have meant that later copy.
-	for _, m := range commented {
-		if !matches[m].skipped {
-			continue
-		}
-		end := len(diff)
-		if m+1 < len(matches) {
-			end = matches[m+1].index
-		}
-		at := matches[m].index
-		for j := at + 1; j < end; j++ {
-			if trimmed(diff[j]) == trimmed(diff[at]) {
-				return "", "", nil, fmt.Errorf("line %d: this line appears more than once in the diff; keep its file and hunk header above it", matches[m].lineNumber)
-			}
-		}
-	}
-
 	return verdict, text.Cleanup(strings.Join(summaryLines, "\n")), comments, nil
 }
 
-// trimmed returns the text of l as compared with a quoted line, without the
-// trailing whitespace an editor may strip.
-func trimmed(l quotedLine) string {
-	return strings.TrimRight(l.text, " \t\r")
+// trimRight removes the trailing whitespace an editor may strip.
+func trimRight(s string) string {
+	return strings.TrimRight(s, " \t\r")
+}
+
+func slicesContainsTrimmed(lines []string, quoted string) bool {
+	for _, l := range lines {
+		if trimRight(l) == quoted {
+			return true
+		}
+	}
+	return false
 }
 
 // verdictByName returns the verdict written as name in the editor.
