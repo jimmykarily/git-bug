@@ -222,7 +222,7 @@ Commands take an ID or a unique ID prefix.
 | `git bug pr` | List PRs: short id, status, title, `source -> target`, author. |
 | `git bug pr new --target BRANCH [--source BRANCH] [-t TITLE] [-m MSG]` | Open a PR. The source defaults to the checked-out branch. The head is the source branch's current commit. It refuses when there is nothing to review: the source and target are the same branch, or the source has no commit the target lacks (same commit, or already merged), and when the two branches share no history. |
 | `git bug pr show ID` | Header (title, status, branches, head, author), the message, then the timeline in operation order (as for bugs), each entry with its author and date. Line comments print under their review as `path:line @ shortcommit` (`path:-line` for a removed line), followed by that line of code, read at the head for added and unchanged lines and at the base for removed lines, and marked `outdated` when the comment's commit is not the current head. If the commit is not in the local clone (for example after a force-push), the comment still prints, with `code not available (commit abc123 not in this clone)` in place of the code. The header also prints `View the changes: git bug pr diff <id>`. |
-| `git bug pr diff ID` | Print the PR's diff (merge base of target and head, to the head) in unified format. |
+| `git bug pr diff ID [--no-comments]` | Print the PR's diff (merge base of target and head, to the head) in unified format, with each line comment printed under the line it is about. Comments that are not on a line of this diff (made on an older head, or with `--at` outside the diff) are listed after it. `--no-comments` prints the plain diff, which `git apply` accepts. |
 | `git bug pr comment ID -m MSG` | Add a general comment. |
 | `git bug pr review ID [--approve \| --request-changes] [-m SUMMARY] [--at PATH:LINE:MESSAGE ...]` | Submit a review. With neither `-m` nor `--at`, in an interactive session, it opens the editor on the PR's diff (see below). `--at` can be repeated and comments on line LINE of the file at the head, which may be outside the diff. The CLI fails if the file or line does not exist at the head. |
 | `git bug pr head ID [--commit HASH]` | Record a new head. Defaults to the source branch's current commit. `--commit` takes a full commit ID. Prints `head set to <new> (was <old>)`, or `head unchanged` and does nothing if the head has not moved. |
@@ -695,6 +695,50 @@ Tests (`parseReview` is tested without an editor):
 
 After the last step, regenerate `doc/man` and `doc/md` (`go run
 doc/generate.go`), since `pr diff` is new and `pr review`'s help changes.
+
+### Step 12: comments inside `pr diff`
+
+Files: modify `commands/pr/diff.go`, `commands/pr/pr_diff.go`,
+`commands/pr/pr_show.go` (only to share helpers) and their tests, and the
+callers of `writeUnifiedDiff` in `commands/pr/review_editor.go`.
+
+- `writeUnifiedDiff(w, files, prefix, after func(file repository.FileDiff,
+  line repository.DiffLine))`: `after` is called after each code line (not
+  after header lines) and may be nil. The review template and the parser
+  pass nil, so their output does not change.
+- A comment is shown inline when its `Commit` is the PR's current head and
+  its `Base` is the current merge base, and it matches a line of the diff:
+  same `Path` and `NewLine` for a comment with a `NewLine` (added or
+  unchanged line), or a deleted line with the same `OldLine` in the file
+  whose old path is the comment's `OldPath` (or `Path` if empty) for a
+  comment with only an `OldLine`. Every other comment goes to the list after
+  the diff.
+- Under its line, each comment prints as:
+
+  ```
+      ┃ <author>, <Mon Jan 2 15:04 2006> (<verdict word>)
+      ┃ <first line of the message>
+      ┃ <each further line; an empty line prints as "    ┃">
+  ```
+
+  The verdict word is the one `pr show` uses (`approved`, `requested
+  changes`, `reviewed`). Several comments on one line print one after the
+  other, in timeline order.
+- After the diff, when there are such comments, an empty line, then
+  `Comments not on a line of this diff:`, then each comment printed as
+  `pr show` prints a line comment (`path:line @ short`, the code line or the
+  "code not available" note, `[outdated]` when it applies), preceded by the
+  same `┃ <author>, <date> (<verdict>)` line.
+- `pr diff --no-comments` prints the diff exactly as before this step.
+
+Tests: `TestPrDiff` gains a review with a comment on the added line and one
+on a removed line (the helper may need a branch that removes a line) and
+checks the exact output; a two-paragraph comment; two comments on one line;
+a comment made on an older head appears in the list after the diff and not
+inline; `--no-comments` output equals the plain diff; the review template
+output is unchanged (`TestReviewTemplate` still passes untouched).
+
+After this step, regenerate `doc/man` and `doc/md`.
 
 After the last step, the PR description gets a short demo: two clones and a bare
 remote exchanging a PR and a review, as exact commands with their output.
