@@ -146,7 +146,9 @@ of changes made to it ("operations": create, add a comment, change the status,
   - `commit`: the head the comment was made on.
   - `base`: the merge base that diff was computed from.
   - `path`: the file path at the head, and `old_path`, set only when the file
-    was renamed.
+    was renamed. The diff does not detect renames today, as for per-commit
+    diffs, so a renamed file shows as a deletion plus an addition and
+    `old_path` is only set once rename detection is added.
   - `old_line` and `new_line`: the line number in the file at `base` and at
     `commit`. A removed line has only `old_line`, an added line only
     `new_line`, an unchanged line both. Unused numbers are 0.
@@ -235,14 +237,15 @@ one review. Blank lines inside a comment separate its paragraphs, and a comment
 ends at the next quoted line. Quoted lines tell where each comment goes: a
 `diff --git` or `+++ b/` line names the file, and an `@@` line names the hunk
 and the line numbers. Files and hunks must stay in the order of the diff. The
-reviewer may delete whole files, whole hunks, or the end of a hunk, and keeps
-the file and hunk header and every quoted line above the line they comment on.
-Other changes to the quoted lines are errors, as is a quoted line of code with
-no file and hunk header above it. One mistake cannot be detected: if the
-reviewer deletes the first lines of a hunk and the lines kept repeat them, the
-comment is placed on the deleted copy. When the review has no summary and no
-comment and its verdict is the preset one or `comment`, it is aborted and
-nothing is written.
+reviewer may delete whole files, whole hunks, or the end of a hunk, and must
+keep the file and hunk header and every quoted line above the line they comment
+on. Other changes to the quoted lines are errors, as is a quoted line of code
+with no file and hunk header above it. The parser cannot tell when the reviewer
+deletes lines whose kept neighbours repeat them, for example the start of a
+hunk, or one of two files with identical changes; the comment then lands on the
+deleted copy. A review with the verdict `comment`, no summary and no comment is
+aborted and nothing is written. An unchanged template opened with `--approve`
+or `--request-changes` submits that verdict with no text.
 
 ```
 # Review of 0c8c916 "Add X" (feature -> trunk, head db6beb8)
@@ -649,22 +652,25 @@ Files: create `commands/pr/review_editor.go` and its test; modify
   `lineTarget{Path, OldPath string; OldLine, NewLine int; Message string}`.
   Lines starting with `#` are ignored. The first other line is the verdict
   (`comment`, `approve` or `request-changes`). Unquoted text before the first
-  quoted line is the summary. Quoted lines are read as a unified diff to know
-  the current file and line numbers: `> +++ b/P` sets the path, `> @@ ... @@`
-  sets both counters, and ` `, `+` and `-` lines move them. Unquoted lines
-  after a quoted diff line form one comment on that line (consecutive lines
-  join with newlines; blank lines end it). A comment under a file or hunk
-  header line is an error naming the line of the edited text. An unknown
-  verdict is an error. The parsed position is checked against `files`, so a
-  comment under a line the reviewer typed with a `> ` is rejected.
+  quoted line is the summary. Placement is anchored on the quoted `diff --git`
+  and `@@` header lines, matched in diff order against `files`, not on counting
+  from `@@`. Under a hunk, each quoted code line must match the next line of
+  that hunk exactly; the only allowed deletions are whole files, whole hunks
+  and the end of a hunk. An unquoted line after a quoted code line starts a
+  comment on that line, and consecutive unquoted lines join into one comment
+  with paragraphs kept (a blank line separates paragraphs and does not end the
+  comment); it ends at the next quoted line. A comment under a file or hunk
+  header line, a changed or out-of-order quoted line, and an unknown verdict
+  are errors naming the line of the edited text.
 - `pr review ID`: when neither `-m` nor `--at` is given and the session is
   interactive, it computes the diff with `prDiff`, opens the editor with
   `input.LaunchEditorWithTemplate` on the template (verdict from the
   `--approve` or `--request-changes` flag, `comment` otherwise), parses the
-  result, fills `Commit` (the head) and `Base`, and submits one review. An
-  unchanged template, or a result with only the verdict `comment` and nothing
-  else, prints `Empty review, aborting.` and writes nothing, as `bug new` does
-  for an empty title.
+  result, fills `Commit` (the head) and `Base`, and submits one review. A
+  review with verdict `comment`, no summary and no comment prints `Empty
+  review, aborting.` and writes nothing, as `bug new` does for an empty title.
+  An unchanged template opened with `--approve` or `--request-changes`
+  submits that verdict with no text.
 
 Tests (`parseReview` is tested without an editor):
 - a comment under an added line, a removed line and an unchanged line give
