@@ -507,6 +507,21 @@ changed.
 After step 7, the PR description gets a short demo: two clones and a bare
 remote exchanging a PR and a review, as exact commands with their output.
 
+## Answers to the design questions in #373
+
+- What would the data model look like? See "Data model".
+- What interactions are supported? Opening a PR, general comments, reviews
+  with line comments, recording a new head, and changing the status. See
+  "CLI".
+- What would the CLI tooling look like? See "CLI".
+- Does this need a code explorer first? Not for the CLI. The reviewer has the
+  code locally, so git and their own editor are the explorer: `git switch` to
+  the branch, read the files, and run the `git diff` command that `pr show`
+  prints. A web UI would need one, and the code browsing support added in
+  #1541 (file tree, file contents, history and per-commit diffs, exposed
+  through the GraphQL API) covers most of it. The diff between two branches,
+  which a PR page shows, is not part of it yet.
+
 ## Questions for upstream
 
 - Should a PR be a separate record type, as #373 suggests, or an extended bug?
