@@ -677,7 +677,7 @@ Tests (`parseReview` is tested without an editor):
   `NewLine` only, `OldLine` only, and both;
 - a two-line comment is one comment;
 - a summary above the diff, and `approve` as verdict;
-- quoted lines deleted by the reviewer still place later comments correctly;
+- deleting whole files, whole hunks or the end of a hunk still places later comments correctly, and deleting a line in the middle of a hunk is an error;
 - a comment under `> @@` fails; an unknown verdict fails;
 - `TestPrReviewEditor` sets the `GIT_EDITOR` (or the editor the repository
   config uses in tests; see how `commands/input` tests do it) to a script that
