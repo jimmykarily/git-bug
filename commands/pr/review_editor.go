@@ -13,12 +13,19 @@ import (
 
 const reviewFilename = "PR_REVIEW_EDITMSG"
 
-const reviewTemplateHeader = `# Review of %s %q (%s -> %s, head %s)
-# First line: comment, approve or request-changes.
-# Text before the diff is the summary. Write a comment on the line(s) right
-# under the diff line it is about. Lines starting with # are ignored.
-# You may delete whole files, whole hunks, or the end of a hunk. Keep the file
-# and hunk header and every quoted line above the one you comment on.
+const reviewTemplateHeader = `# Reviewing %s %q (%s -> %s, head %s)
+#
+# The first line below is the verdict: comment, approve or request-changes.
+# Text between the verdict and the diff is your summary.
+# To comment on a line of the diff, add a new line right under it that does
+# not start with ">", and write your comment there:
+#
+#   > +	greet()
+#   Please add a test for greet.
+#
+# Do not edit the ">" lines, and keep all of them above a comment. You may
+# delete whole files, whole hunks (from an "@@" line), or the end of a hunk.
+# Lines starting with "#" are ignored.
 %s
 
 `

@@ -248,12 +248,19 @@ aborted and nothing is written. An unchanged template opened with `--approve`
 or `--request-changes` submits that verdict with no text.
 
 ```
-# Review of 0c8c916 "Add X" (feature -> trunk, head db6beb8)
-# First line: comment, approve or request-changes.
-# Text before the diff is the summary. Write a comment on the line(s) right
-# under the diff line it is about. Lines starting with # are ignored.
-# You may delete whole files, whole hunks, or the end of a hunk. Keep the file
-# and hunk header and every quoted line above the one you comment on.
+# Reviewing 0c8c916 "Add X" (feature -> trunk, head db6beb8)
+#
+# The first line below is the verdict: comment, approve or request-changes.
+# Text between the verdict and the diff is your summary.
+# To comment on a line of the diff, add a new line right under it that does
+# not start with ">", and write your comment there:
+#
+#   > +	greet()
+#   Please add a test for greet.
+#
+# Do not edit the ">" lines, and keep all of them above a comment. You may
+# delete whole files, whole hunks (from an "@@" line), or the end of a hunk.
+# Lines starting with "#" are ignored.
 comment
 
 > diff --git a/main.go b/main.go
