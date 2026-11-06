@@ -57,7 +57,7 @@ working code.
 - Running the merge. `git merge` stays the user's job; the PR records the
   outcome.
 - Editing comments or titles, labels, the query language, threads of replies
-  under a review comment, multi-line ranges, and rendering diffs.
+  under a review comment, and multi-line ranges.
 
 ## Things to avoid
 
@@ -135,14 +135,30 @@ of changes made to it ("operations": create, add a comment, change the status,
   - `AddCommentOp`: a general comment (message).
   - `AddReviewOp`: one submitted review. It holds a verdict (`comment`,
     `approve` or `request-changes`), an optional summary message, and a list of
-    line comments. Each line comment has a commit ID, a file path, a line
-    number (1-based, in the file as it is at that commit) and a message. A
-    review is a single operation so that it is published all at once, like a
-    submitted review on GitHub.
+    line comments. A review is a single operation so that it is published all
+    at once, like a submitted review on GitHub.
   - `SetHeadOp`: a new head commit, recorded when the source branch gets new
     or rewritten commits.
   - `SetStatusOp`: `open`, `closed` or `merged`. This is a status type of its
     own, because `entities/common.Status` has no merged state.
+- A line comment points at one line of the PR's diff, which is the diff from
+  the merge base of the target and the head, to the head. It holds:
+  - `commit`: the head the comment was made on.
+  - `base`: the merge base that diff was computed from.
+  - `path`: the file path at the head, and `old_path`, set only when the file
+    was renamed.
+  - `old_line` and `new_line`: the line number in the file at `base` and at
+    `commit`. A removed line has only `old_line`, an added line only
+    `new_line`, an unchanged line both. Unused numbers are 0.
+  - the message.
+
+  These fields carry what GitHub, GitLab and Gitea need, so a bridge can map
+  comments both ways. GitHub uses `side` (LEFT or RIGHT) and `line`, GitLab
+  uses `old_line`, `new_line` and the base commit, Gitea uses `old_position`
+  and `new_position`. All three accept comments only on lines in the diff.
+  git-bug also accepts a comment on any line of a file at the head (with `--at`,
+  see "CLI"); a bridge would have to export such a comment as a general
+  comment that names the file and line.
 - Branch names are stored as plain branch names (`feature-x`, `trunk`), the
   way a forge shows them. They are labels, and the head commit ID is what the
   PR actually points at. When the CLI needs a branch's commit, it tries the
@@ -160,8 +176,9 @@ of changes made to it ("operations": create, add a comment, change the status,
   to build on. Rules can come later as checks in the CLI; adding them to the
   replay logic would change the state of existing PRs.
 - Validation, at the operation level: non-empty title and branch names, commit
-  IDs that are well-formed hashes, non-empty file paths, line numbers of at
-  least 1, a known verdict and a known status. Whether a commit or file exists
+  IDs that are well-formed hashes, non-empty file paths, line numbers that are
+  not negative with at least one of them set, a known verdict and a known
+  status. Whether a commit or file exists
   is checked by the CLI, because operations have no access to the repository.
 - Authorship comes from git-bug identities (the users created with
   `git bug user new`). `entity/dag` records the identity of whoever made each
@@ -202,11 +219,37 @@ Commands take an ID or a unique ID prefix.
 | --- | --- |
 | `git bug pr` | List PRs: short id, status, title, `source -> target`, author. |
 | `git bug pr new --target BRANCH [--source BRANCH] [-t TITLE] [-m MSG]` | Open a PR. The source defaults to the checked-out branch. The head is the source branch's current commit. It refuses when there is nothing to review: the source and target are the same branch, or the source has no commit the target lacks (same commit, or already merged). That check walks the target's history, which is slow on very large repositories. |
-| `git bug pr show ID` | Header (title, status, branches, head, author), the message, then the timeline in operation order (as for bugs), each entry with its author and date. Line comments print under their review as `path:line @ shortcommit`, followed by that line of code read from the repository, marked `outdated` when the commit is not the current head. If the commit is not in the local clone (for example after a force-push), the comment still prints, with `code not available (commit abc123 not in this clone)` in place of the code. The header also prints the command to see the changes: `git diff TARGET_COMMIT...HEAD_COMMIT`, with the target branch resolved as described under "Data model" and both commits as full IDs. |
+| `git bug pr show ID` | Header (title, status, branches, head, author), the message, then the timeline in operation order (as for bugs), each entry with its author and date. Line comments print under their review as `path:line @ shortcommit` (`path:-line` for a removed line), followed by that line of code, read at the head for added and unchanged lines and at the base for removed lines, and marked `outdated` when the comment's commit is not the current head. If the commit is not in the local clone (for example after a force-push), the comment still prints, with `code not available (commit abc123 not in this clone)` in place of the code. The header also prints `View the changes: git bug pr diff <id>`. |
+| `git bug pr diff ID` | Print the PR's diff (merge base of target and head, to the head) in unified format. |
 | `git bug pr comment ID -m MSG` | Add a general comment. |
-| `git bug pr review ID [--approve \| --request-changes] [-m SUMMARY] [--at PATH:LINE:MESSAGE ...]` | Submit a review. The summary is given with `-m` only; there is no editor. `--at` can be repeated. Line comments are made on the PR's current head. The CLI fails if the file or line does not exist at that commit. |
+| `git bug pr review ID [--approve \| --request-changes] [-m SUMMARY] [--at PATH:LINE:MESSAGE ...]` | Submit a review. With neither `-m` nor `--at`, in an interactive session, it opens the editor on the PR's diff (see below). `--at` can be repeated and comments on line LINE of the file at the head, which may be outside the diff. The CLI fails if the file or line does not exist at the head. |
 | `git bug pr head ID [--commit HASH]` | Record a new head. Defaults to the source branch's current commit. `--commit` takes a full commit ID. Prints `head set to <new> (was <old>)`, or `head unchanged` and does nothing if the head has not moved. |
 | `git bug pr status ID open\|closed\|merged` | Set the status. |
+
+Reviewing in the editor: `pr review ID` writes the verdict line, then the
+PR's diff with every diff line quoted with `> `. The reviewer writes comments
+on unquoted lines right under the diff line they are about, and text above the
+diff becomes the summary. On save, each comment is attached to the diff line
+above it, on whichever side that line is on, and all of them are submitted as
+one review. Quoted lines may be deleted; they are used only to know where each
+comment goes.
+
+```
+# Review of 0c8c916 "Add X" (feature -> trunk, head db6beb8)
+# First line: comment, approve or request-changes.
+# Text before the diff is the summary. Write a comment on the line(s) right
+# under the diff line it is about. Lines starting with # are ignored.
+comment
+
+> diff --git a/main.go b/main.go
+> --- a/main.go
+> +++ b/main.go
+> @@ -1,2 +1,3 @@
+>  line one
+>  line two
+> +line three
+This should be a constant.
+```
 
 Messages follow the existing conventions where cheap: `-m` for inline, `-F` for
 a file, and the editor when neither is given and the session is interactive.
@@ -504,7 +547,131 @@ row of `doc/feature-matrix.md`, set the Core and CLI columns to the partial
 mark used for "Board". Check with `git status` that only generated docs and that row
 changed.
 
-After step 7, the PR description gets a short demo: two clones and a bare
+### Step 8: the diff between two commits
+
+Files: modify `repository/browse.go` (the `RepoBrowse` interface),
+`repository/gogit.go`, `repository/mock_repo.go`, and
+`repository/repotest/suite.go` (`RepoBrowseTest`, which runs against both
+implementations).
+
+- `MergeBase(ctx, a, b Hash) (Hash, error)`: the best common ancestor of two
+  commits. Returns `ErrNotFound` if either commit is missing or they share no
+  ancestor. The go-git version uses `Commit.MergeBase`.
+- `DiffCommits(ctx, from, to Hash) ([]FileDiff, error)`: one `FileDiff` per
+  changed file between the two commits, sorted by path, with renames as in
+  `CommitDetail` and hunks built by the existing `buildDiffHunks`. Returns
+  `ErrNotFound` if either commit is missing.
+
+Tests in `RepoBrowseTest`: the merge base of two branches that fork from one
+commit is that commit; the merge base of a commit and its descendant is the
+commit; a missing commit gives `ErrNotFound`. `DiffCommits` between the fork
+point and a branch that edits one file and adds another gives two
+`FileDiff`s with the right line types and old and new line numbers; a missing
+commit gives `ErrNotFound`; a cancelled context returns its error, as the
+existing `CommitFileDiff` test checks.
+
+### Step 9: line comments on both sides of the diff
+
+Files: modify `entities/pullrequest/op_add_review.go` and its test, the cache
+and CLI code that builds or reads `LineComment` (`cache/pullrequest_test.go`,
+`commands/pr/pr_review.go`, `commands/pr/pr_show.go`, `commands/pr/code.go`
+and their tests).
+
+- `LineComment` becomes `{Commit, Base repository.Hash; Path, OldPath string;
+  OldLine, NewLine int; Message string}` with JSON names `commit`, `base`,
+  `path`, `old_path` (omitted when empty), `old_line`, `new_line`, `message`.
+  The `line` field goes away; the format version stays 1 because no release
+  has written PRs.
+- `Validate`: `Commit` and `Base` valid, `Path` non-empty, both line numbers
+  at least 0 and at least one of them at least 1, message non-empty and
+  printable.
+- `pr review --at PATH:LINE:MESSAGE`: `Commit` is the head, `Base` is
+  `MergeBase(target commit, head)`, `NewLine` is LINE. If the line is an
+  unchanged line inside the diff, `OldLine` is filled from the diff too;
+  otherwise it stays 0.
+- `pr show`: prints `path:N` for a comment with a `NewLine` and `path:-N` for
+  one with only an `OldLine`. The code shown is read with `readLine` at
+  `Commit` for `NewLine`, and at `Base` (and `OldPath` if set) for `OldLine`.
+
+Tests: `TestAddReviewValidate` gains cases for both lines 0, a negative line
+and a bad base. `TestPrReview` checks that `--at` on the added line stores
+`NewLine` 3 and `OldLine` 0, and on line 1 (unchanged) stores both as 1.
+`TestPrShow` gains a comment on a removed line that prints `main.go:-N` and
+the removed text read at the base. The test helper may gain a branch that
+removes a line.
+
+### Step 10: `git bug pr diff`
+
+Files: create `commands/pr/pr_diff.go`, `commands/pr/diff.go` and their tests;
+modify `commands/pr/pr.go` (register the command) and `commands/pr/pr_show.go`.
+
+- `diff.go`: `prDiff(env, snap) (base repository.Hash, files []repository.FileDiff, err error)`,
+  which resolves the target branch, computes the merge base with the head and
+  calls `DiffCommits`. Steps 9 and 11 use it too; if step 9 needed the merge
+  base earlier, move that code here.
+- `writeUnifiedDiff(w io.Writer, files []repository.FileDiff, prefix string)`:
+  writes `diff --git a/P b/P`, `--- a/P` (or `/dev/null`), `+++ b/P` (or
+  `/dev/null`), `@@ -os,ol +ns,nl @@`, then each line with ` `, `+` or `-`.
+  Binary files print `Binary files differ`. `prefix` is put in front of every
+  line; step 11 passes `> `.
+- `pr diff ID` prints the diff. `pr show` prints
+  `View the changes: git bug pr diff <short id>` instead of the `git diff`
+  line.
+
+Tests: `TestPrDiff` checks the exact output for the test branches (one
+added line). `TestWriteUnifiedDiff` checks a new file, a deleted file, a
+rename and the prefix. `TestPrShow`'s expected output changes for the new
+line.
+
+### Step 11: reviewing in the editor
+
+Files: create `commands/pr/review_editor.go` and its test; modify
+`commands/pr/pr_review.go` and its test.
+
+- `reviewTemplate(id, title, source, target string, head repository.Hash,
+  verdict pullrequest.Verdict, files []repository.FileDiff) string`: the
+  comment header shown under "CLI", the verdict word on its own line, a blank
+  line, then `writeUnifiedDiff` with the `> ` prefix.
+- `parseReview(text string, files []repository.FileDiff) (verdict, summary
+  string, comments []lineTarget, err error)`, where
+  `lineTarget{Path, OldPath string; OldLine, NewLine int; Message string}`.
+  Lines starting with `#` are ignored. The first other line is the verdict
+  (`comment`, `approve` or `request-changes`). Unquoted text before the first
+  quoted line is the summary. Quoted lines are read as a unified diff to know
+  the current file and line numbers: `> +++ b/P` sets the path, `> @@ ... @@`
+  sets both counters, and ` `, `+` and `-` lines move them. Unquoted lines
+  after a quoted diff line form one comment on that line (consecutive lines
+  join with newlines; blank lines end it). A comment under a file or hunk
+  header line is an error naming the line of the edited text. An unknown
+  verdict is an error. The parsed position is checked against `files`, so a
+  comment under a line the reviewer typed with a `> ` is rejected.
+- `pr review ID`: when neither `-m` nor `--at` is given and the session is
+  interactive, it computes the diff with `prDiff`, opens the editor with
+  `input.LaunchEditorWithTemplate` on the template (verdict from the
+  `--approve` or `--request-changes` flag, `comment` otherwise), parses the
+  result, fills `Commit` (the head) and `Base`, and submits one review. An
+  unchanged template, or a result with only the verdict `comment` and nothing
+  else, prints `Empty review, aborting.` and writes nothing, as `bug new` does
+  for an empty title.
+
+Tests (`parseReview` is tested without an editor):
+- a comment under an added line, a removed line and an unchanged line give
+  `NewLine` only, `OldLine` only, and both;
+- a two-line comment is one comment;
+- a summary above the diff, and `approve` as verdict;
+- quoted lines deleted by the reviewer still place later comments correctly;
+- a comment under `> @@` fails; an unknown verdict fails;
+- `TestPrReviewEditor` sets the `GIT_EDITOR` (or the editor the repository
+  config uses in tests; see how `commands/input` tests do it) to a script that
+  appends a comment under the added line, runs `pr review` interactively, and
+  checks the stored review. If driving an editor from the test is not
+  practical, test the code path after the editor with the edited text passed
+  in, and say so.
+
+After the last step, regenerate `doc/man` and `doc/md` (`go run
+doc/generate.go`), since `pr diff` is new and `pr review`'s help changes.
+
+After the last step, the PR description gets a short demo: two clones and a bare
 remote exchanging a PR and a review, as exact commands with their output.
 
 ## Answers to the design questions in #373
@@ -516,11 +683,12 @@ remote exchanging a PR and a review, as exact commands with their output.
 - What would the CLI tooling look like? See "CLI".
 - Does this need a code explorer first? Not for the CLI. The reviewer has the
   code locally, so git and their own editor are the explorer: `git switch` to
-  the branch, read the files, and run the `git diff` command that `pr show`
-  prints. A web UI would need one, and the code browsing support added in
-  #1541 (file tree, file contents, history and per-commit diffs, exposed
-  through the GraphQL API) covers most of it. The diff between two branches,
-  which a PR page shows, is not part of it yet.
+  the branch and read the files. `pr diff` prints the PR's changes, and
+  `pr review` opens the same diff in the editor for line comments. A web UI
+  would need one, and the code browsing support added in #1541 (file tree,
+  file contents, history and per-commit diffs, exposed through the GraphQL
+  API) covers most of it. Step 8 adds the missing piece, the diff between two
+  commits, to the same interface.
 
 ## Questions for upstream
 
@@ -542,6 +710,9 @@ remote exchanging a PR and a review, as exact commands with their output.
   commented line is unchanged in the new head. This compares the file at the
   comment's commit with the file at the head. Comments already store their
   commit, so this needs no format change.
+- Storing a copy of the diff lines with each line comment, as GitHub and
+  Gitea return a `diff_hunk`. `pr show` could then print a comment's code even
+  when its commit is no longer in the clone after a force-push.
 - Draft reviews: collecting line comments over time and submitting them as one
   review.
 - Replies under a line comment, multi-line ranges, editing, labels, linking a
