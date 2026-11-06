@@ -9,6 +9,7 @@ import (
 	"github.com/git-bug/git-bug/commands/execenv"
 	"github.com/git-bug/git-bug/entities/pullrequest"
 	"github.com/git-bug/git-bug/repository"
+	"github.com/git-bug/git-bug/util/colors"
 )
 
 // prDiff returns the merge base of the target branch and the head of the pull
@@ -56,9 +57,27 @@ func unchangedLine(files []repository.FileDiff, path string, newLine int) (int, 
 // front of every line. Files without a trailing newline are printed as if they
 // had one, because repository.DiffLine does not record it. When after is not
 // nil, it is called after each line of code, but not after header lines.
+// The output has no colors.
 func writeUnifiedDiff(w io.Writer, files []repository.FileDiff, prefix string, after func(file repository.FileDiff, line repository.DiffLine)) {
+	writeDiff(w, files, prefix, false, after)
+}
+
+// writeDiff is writeUnifiedDiff that colors the lines as git diff does when
+// colored is true: bold file headers, cyan hunk headers, green added lines and
+// red removed lines. The colors are still off when the output is not a
+// terminal or when they are disabled.
+func writeDiff(w io.Writer, files []repository.FileDiff, prefix string, colored bool, after func(file repository.FileDiff, line repository.DiffLine)) {
+	paint := func(style func(a ...interface{}) string, s string) string {
+		if colored && style != nil {
+			return style(s)
+		}
+		return s
+	}
+	lineWith := func(style func(a ...interface{}) string, format string, args ...any) {
+		_, _ = fmt.Fprintf(w, "%s%s\n", prefix, paint(style, fmt.Sprintf(format, args...)))
+	}
 	line := func(format string, args ...any) {
-		_, _ = fmt.Fprintf(w, "%s%s\n", prefix, fmt.Sprintf(format, args...))
+		lineWith(colors.Bold, format, args...)
 	}
 
 	for _, f := range files {
@@ -98,16 +117,17 @@ func writeUnifiedDiff(w io.Writer, files []repository.FileDiff, prefix string, a
 			line("+++ b/%s", f.Path)
 		}
 		for _, h := range f.Hunks {
-			line("@@ -%d,%d +%d,%d @@", h.OldStart, h.OldLines, h.NewStart, h.NewLines)
+			lineWith(colors.Cyan, "@@ -%d,%d +%d,%d @@", h.OldStart, h.OldLines, h.NewStart, h.NewLines)
 			for _, l := range h.Lines {
 				marker := " "
+				var style func(a ...interface{}) string
 				switch l.Type {
 				case repository.DiffLineAdded:
-					marker = "+"
+					marker, style = "+", colors.Green
 				case repository.DiffLineDeleted:
-					marker = "-"
+					marker, style = "-", colors.Red
 				}
-				line("%s%s", marker, l.Content)
+				lineWith(style, "%s%s", marker, l.Content)
 				if after != nil {
 					after(f, l)
 				}
@@ -153,8 +173,8 @@ const commentIndent = "    ┃"
 // header returns the line that starts a printed comment: the author, the date
 // and the verdict of its review.
 func (d diffComment) header() string {
-	return fmt.Sprintf("%s %s, %s (%s)\n", commentIndent, d.review.Author.DisplayName(),
-		d.review.UnixTime.Time().Format(diffCommentDateLayout), verdictWord(d.review.Verdict))
+	return fmt.Sprintf("%s %s%s (%s)\n", colors.Dim(commentIndent), colors.Magenta(d.review.Author.DisplayName()),
+		colors.Dim(", "+d.review.UnixTime.Time().Format(diffCommentDateLayout)), coloredVerdict(d.review.Verdict))
 }
 
 // printDiffWithComments prints the diff with each line comment under the line
@@ -170,7 +190,7 @@ func printDiffWithComments(env *execenv.Env, snap *pullrequest.Snapshot, base re
 	}
 
 	shown := make([]bool, len(comments))
-	writeUnifiedDiff(env.Out, files, "", func(f repository.FileDiff, l repository.DiffLine) {
+	writeDiff(env.Out, files, "", true, func(f repository.FileDiff, l repository.DiffLine) {
 		for i, c := range comments {
 			if !c.onLine(snap.Head, base, f, l) {
 				continue
@@ -179,9 +199,9 @@ func printDiffWithComments(env *execenv.Env, snap *pullrequest.Snapshot, base re
 			env.Out.Printf("%s", c.header())
 			for _, m := range strings.Split(c.comment.Message, "\n") {
 				if m == "" {
-					env.Out.Printf("%s\n", commentIndent)
+					env.Out.Printf("%s\n", colors.Dim(commentIndent))
 				} else {
-					env.Out.Printf("%s %s\n", commentIndent, m)
+					env.Out.Printf("%s %s\n", colors.Dim(commentIndent), m)
 				}
 			}
 		}

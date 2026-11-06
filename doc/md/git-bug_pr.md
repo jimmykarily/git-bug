@@ -13,7 +13,8 @@ git-bug pr [flags]
 ### Options
 
 ```
-  -h, --help   help for pr
+  -h, --help        help for pr
+      --no-colors   Do not color the output
 ```
 
 ### SEE ALSO

@@ -12,6 +12,12 @@ git-bug pr status PR_ID open|closed|merged [flags]
   -h, --help   help for status
 ```
 
+### Options inherited from parent commands
+
+```
+      --no-colors   Do not color the output
+```
+
 ### SEE ALSO
 
 * [git-bug pr](git-bug_pr.md)	 - List pull requests

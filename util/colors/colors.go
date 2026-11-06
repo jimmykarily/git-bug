@@ -4,6 +4,7 @@ import "github.com/fatih/color"
 
 var (
 	Bold       = color.New(color.Bold).SprintFunc()
+	Dim        = color.New(color.Faint).SprintFunc()
 	Black      = color.New(color.FgBlack).SprintFunc()
 	BlackBold  = color.New(color.FgBlack, color.Bold).SprintfFunc()
 	BlackBg    = color.New(color.BgBlack, color.FgWhite).SprintFunc()

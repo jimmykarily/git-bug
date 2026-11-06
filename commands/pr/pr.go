@@ -3,12 +3,15 @@ package prcmd
 import (
 	"cmp"
 	"slices"
+	"strconv"
 	"strings"
 
+	"github.com/fatih/color"
 	"github.com/spf13/cobra"
 
 	"github.com/git-bug/git-bug/cache"
 	"github.com/git-bug/git-bug/commands/execenv"
+	"github.com/git-bug/git-bug/util/colors"
 )
 
 func NewPullRequestCommand(env *execenv.Env) *cobra.Command {
@@ -22,6 +25,20 @@ func NewPullRequestCommand(env *execenv.Env) *cobra.Command {
 			return runPr(env)
 		}),
 	}
+
+	// The flag turns colors off as soon as it is parsed, for this command and
+	// every subcommand, without relying on a PersistentPreRun that a
+	// subcommand'"'"'s own PreRunE would shadow.
+	cmd.PersistentFlags().BoolFunc("no-colors", "Do not color the output", func(value string) error {
+		off, err := strconv.ParseBool(value)
+		if err != nil {
+			return err
+		}
+		if off {
+			color.NoColor = true
+		}
+		return nil
+	})
 
 	cmd.AddCommand(newPrNewCommand(env))
 	cmd.AddCommand(newPrShowCommand(env))
@@ -57,12 +74,12 @@ func runPr(env *execenv.Env) error {
 		}
 
 		env.Out.Printf("%s\t%s\t%s\t%s -> %s\t%s\n",
-			p.Id().Human(),
-			p.Status,
+			colors.Cyan(p.Id().Human()),
+			colors.Yellow(p.Status),
 			strings.TrimSpace(p.Title),
 			p.Source,
 			p.Target,
-			author.DisplayName(),
+			colors.Magenta(author.DisplayName()),
 		)
 	}
 	return nil

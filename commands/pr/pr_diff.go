@@ -46,7 +46,7 @@ func runPrDiff(env *execenv.Env, opts prDiffOptions, args []string) error {
 	}
 
 	if opts.noComments {
-		writeUnifiedDiff(env.Out, files, "", nil)
+		writeDiff(env.Out, files, "", true, nil)
 		return nil
 	}
 	printDiffWithComments(env, snap, base, files)

@@ -12,6 +12,7 @@ import (
 	"github.com/git-bug/git-bug/entities/identity"
 	"github.com/git-bug/git-bug/entities/pullrequest"
 	"github.com/git-bug/git-bug/repository"
+	"github.com/git-bug/git-bug/util/colors"
 	"github.com/git-bug/git-bug/util/text"
 	"github.com/git-bug/git-bug/util/timestamp"
 )
@@ -39,13 +40,13 @@ func runPrShow(env *execenv.Env, args []string) error {
 	}
 	snap := pr.Snapshot()
 
-	env.Out.Printf("%s [%s]\n", snap.Title, snap.Status)
+	env.Out.Printf("%s [%s]\n", colors.Bold(snap.Title), colors.Yellow(snap.Status))
 	env.Out.Printf("%s -> %s, head %s\n", snap.Source, snap.Target, short(snap.Head))
-	env.Out.Printf("opened by %s on %s\n", snap.Author.DisplayName(), snap.CreateTime.Format(dateLayout))
+	env.Out.Printf("opened by %s on %s\n", colors.Magenta(snap.Author.DisplayName()), snap.CreateTime.Format(dateLayout))
 	if !text.Empty(snap.Message) {
 		env.Out.Printf("\n%s\n", snap.Message)
 	}
-	env.Out.Printf("\nView the changes: git bug pr diff %s\n", pr.Id().Human())
+	env.Out.Printf("\nView the changes: git bug pr diff %s\n", colors.Cyan(pr.Id().Human()))
 
 	for _, item := range snap.Timeline {
 		switch item := item.(type) {
@@ -53,7 +54,7 @@ func runPrShow(env *execenv.Env, args []string) error {
 			env.Out.Printf("\n--- %s\n", entryTitle(item.Author, "commented", item.UnixTime))
 			env.Out.Printf("%s\n", item.Message)
 		case *pullrequest.ReviewTimelineItem:
-			env.Out.Printf("\n--- %s\n", entryTitle(item.Author, verdictWord(item.Verdict), item.UnixTime))
+			env.Out.Printf("\n--- %s\n", entryTitle(item.Author, coloredVerdict(item.Verdict), item.UnixTime))
 			if item.Message != "" {
 				env.Out.Printf("%s\n", item.Message)
 			}
@@ -63,7 +64,7 @@ func runPrShow(env *execenv.Env, args []string) error {
 		case *pullrequest.HeadTimelineItem:
 			env.Out.Printf("\n--- %s\n", entryTitle(item.Author, "set the head to "+short(item.Head), item.UnixTime))
 		case *pullrequest.StatusTimelineItem:
-			env.Out.Printf("\n--- %s\n", entryTitle(item.Author, "set the status to "+item.Status.String(), item.UnixTime))
+			env.Out.Printf("\n--- %s\n", entryTitle(item.Author, "set the status to "+colors.Yellow(item.Status.String()), item.UnixTime))
 		}
 	}
 
@@ -73,7 +74,7 @@ func runPrShow(env *execenv.Env, args []string) error {
 func printLineComment(env *execenv.Env, snap *pullrequest.Snapshot, c pullrequest.LineComment) {
 	outdated := ""
 	if c.Commit != snap.Head {
-		outdated = " [outdated]"
+		outdated = " " + colors.Dim("[outdated]")
 	}
 
 	// A comment with a new line is read at the commit. One with only an old
@@ -87,18 +88,23 @@ func printLineComment(env *execenv.Env, snap *pullrequest.Snapshot, c pullreques
 		}
 		label = "-" + strconv.Itoa(c.OldLine)
 	}
-	env.Out.Printf("  %s:%s @ %s%s\n", c.Path, label, short(c.Commit), outdated)
+	env.Out.Printf("  %s%s\n", colors.Cyan(fmt.Sprintf("%s:%s @ %s", c.Path, label, short(c.Commit))), outdated)
 
 	code, err := readLine(env.Ctx, env.Repo, commit, path, line)
 	switch {
 	case err == nil:
-		env.Out.Printf("  > %s\n", code)
+		style := lineStyle(env, c)
+		if style == nil {
+			env.Out.Printf("  > %s\n", code)
+		} else {
+			env.Out.Printf("  > %s\n", style(code))
+		}
 	case errors.Is(err, errCommitMissing):
-		env.Out.Printf("  > code not available (commit %s not in this clone)\n", short(commit))
+		env.Out.Printf("  > %s\n", colors.Dim(fmt.Sprintf("code not available (commit %s not in this clone)", short(commit))))
 	case errors.Is(err, errNoSuchLine):
-		env.Out.Printf("  > code not available (no line %d in %s)\n", line, path)
+		env.Out.Printf("  > %s\n", colors.Dim(fmt.Sprintf("code not available (no line %d in %s)", line, path)))
 	default:
-		env.Out.Printf("  > code not available (%s)\n", err)
+		env.Out.Printf("  > %s\n", colors.Dim(fmt.Sprintf("code not available (%s)", err)))
 	}
 	for _, l := range strings.Split(c.Message, "\n") {
 		if l == "" {
@@ -109,8 +115,34 @@ func printLineComment(env *execenv.Env, snap *pullrequest.Snapshot, c pullreques
 	}
 }
 
+// lineStyle returns the color of the code line a comment is about: green when
+// the comment's diff adds the line, red when it removes it, and nil for an
+// unchanged line or when the diff cannot be computed.
+func lineStyle(env *execenv.Env, c pullrequest.LineComment) func(a ...interface{}) string {
+	if c.NewLine == 0 {
+		return colors.Red
+	}
+	files, err := env.Repo.DiffCommits(env.Ctx, c.Base, c.Commit)
+	if err != nil {
+		return nil
+	}
+	for _, f := range files {
+		if f.Path != c.Path {
+			continue
+		}
+		for _, h := range f.Hunks {
+			for _, l := range h.Lines {
+				if l.Type == repository.DiffLineAdded && l.NewLine == c.NewLine {
+					return colors.Green
+				}
+			}
+		}
+	}
+	return nil
+}
+
 func entryTitle(author identity.Interface, what string, t timestamp.Timestamp) string {
-	return fmt.Sprintf("%s %s on %s", author.DisplayName(), what, t.Time().Format(dateLayout))
+	return fmt.Sprintf("%s %s on %s", colors.Magenta(author.DisplayName()), what, t.Time().Format(dateLayout))
 }
 
 func verdictWord(v pullrequest.Verdict) string {
@@ -121,6 +153,19 @@ func verdictWord(v pullrequest.Verdict) string {
 		return "requested changes"
 	default:
 		return "reviewed"
+	}
+}
+
+// coloredVerdict is verdictWord in green for an approval, red for a request
+// for changes and yellow for a plain review.
+func coloredVerdict(v pullrequest.Verdict) string {
+	switch v {
+	case pullrequest.ApproveVerdict:
+		return colors.Green(verdictWord(v))
+	case pullrequest.RequestChangesVerdict:
+		return colors.Red(verdictWord(v))
+	default:
+		return colors.Yellow(verdictWord(v))
 	}
 }
 
