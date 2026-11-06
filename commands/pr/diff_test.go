@@ -2,10 +2,16 @@ package prcmd
 
 import (
 	"bytes"
+	"fmt"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 
+	"github.com/git-bug/git-bug/cache"
+	"github.com/git-bug/git-bug/commands/execenv"
+	"github.com/git-bug/git-bug/entities/identity"
+	"github.com/git-bug/git-bug/entities/pullrequest"
 	"github.com/git-bug/git-bug/repository"
 )
 
@@ -15,7 +21,7 @@ func TestPrDiff(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, pr.Commit(t.Context()))
 
-	require.NoError(t, runPrDiff(env, []string{pr.Id().String()}))
+	require.NoError(t, runPrDiff(env, prDiffOptions{}, []string{pr.Id().String()}))
 
 	expected := `diff --git a/main.go b/main.go
 --- a/main.go
@@ -80,7 +86,7 @@ func TestWriteUnifiedDiff(t *testing.T) {
 	}
 
 	var buf bytes.Buffer
-	writeUnifiedDiff(&buf, files, "")
+	writeUnifiedDiff(&buf, files, "", nil)
 	require.Equal(t, `diff --git a/new.go b/new.go
 new file mode 100644
 --- /dev/null
@@ -113,7 +119,7 @@ Binary files differ
 `, buf.String())
 
 	buf.Reset()
-	writeUnifiedDiff(&buf, files[:1], "> ")
+	writeUnifiedDiff(&buf, files[:1], "> ", nil)
 	require.Equal(t, `> diff --git a/new.go b/new.go
 > new file mode 100644
 > --- /dev/null
@@ -149,4 +155,138 @@ func TestUnchangedLineRename(t *testing.T) {
 	oldLine, oldPath = unchangedLine(files, "missing.go", 1)
 	require.Equal(t, 0, oldLine)
 	require.Nil(t, oldPath)
+}
+
+func TestWriteUnifiedDiffAfterCallback(t *testing.T) {
+	files := []repository.FileDiff{{
+		Path: "a.go",
+		Hunks: []repository.DiffHunk{{OldStart: 1, OldLines: 1, NewStart: 1, NewLines: 2, Lines: []repository.DiffLine{
+			{Type: repository.DiffLineContext, Content: "one", OldLine: 1, NewLine: 1},
+			{Type: repository.DiffLineAdded, Content: "two", NewLine: 2},
+		}}},
+	}}
+
+	var buf bytes.Buffer
+	writeUnifiedDiff(&buf, files, "", func(f repository.FileDiff, l repository.DiffLine) {
+		buf.WriteString("after " + f.Path + " " + l.Content + "\n")
+	})
+	require.Equal(t, `diff --git a/a.go b/a.go
+--- a/a.go
++++ b/a.go
+@@ -1,1 +1,2 @@
+ one
+after a.go one
++two
+after a.go two
+`, buf.String())
+}
+
+// newDiffCommentsPr returns a pull request whose head removes the last line
+// of main.go and adds a line of other.go, and the trunk and head commits.
+func newDiffCommentsPr(t *testing.T) (env *execenv.Env, pr *cache.PullRequestCache, trunk, head repository.Hash, author identity.Interface) {
+	t.Helper()
+
+	env, trunk, _ = newTestEnvWithBranches(t)
+	author, err := env.Backend.GetUserIdentity(t.Context())
+	require.NoError(t, err)
+
+	head = commitMain(t, env, "line one\nline 2\n", trunk)
+	pr, _, err = env.Backend.PullRequests().NewRaw(author, testTime, "my pr", "", "feature", "trunk", head)
+	require.NoError(t, err)
+	return env, pr, trunk, head, author
+}
+
+func TestPrDiffComments(t *testing.T) {
+	env, pr, trunk, head, author := newDiffCommentsPr(t)
+	_, err := pr.AddReviewRaw(author, testTime, pullrequest.RequestChangesVerdict, "", []pullrequest.LineComment{
+		{Commit: head, Base: trunk, Path: "main.go", NewLine: 2, Message: "why the change?"},
+		{Commit: head, Base: trunk, Path: "main.go", OldLine: 2, Message: "first paragraph\n\nsecond paragraph"},
+	})
+	require.NoError(t, err)
+	require.NoError(t, pr.Commit(t.Context()))
+
+	require.NoError(t, runPrDiff(env, prDiffOptions{}, []string{pr.Id().String()}))
+
+	header := fmt.Sprintf("    ┃ John Doe, %s (requested changes)\n", time.Unix(testTime, 0).Format("Mon Jan 2 15:04 2006"))
+	expected := `diff --git a/main.go b/main.go
+--- a/main.go
++++ b/main.go
+@@ -1,2 +1,2 @@
+ line one
+-line two
+` + header + `    ┃ first paragraph
+    ┃
+    ┃ second paragraph
++line 2
+` + header + `    ┃ why the change?
+`
+	require.Equal(t, expected, env.Out.String())
+}
+
+func TestPrDiffSeveralCommentsOnOneLine(t *testing.T) {
+	env, pr, trunk, head, author := newDiffCommentsPr(t)
+	_, err := pr.AddReviewRaw(author, testTime, pullrequest.CommentVerdict, "", []pullrequest.LineComment{
+		{Commit: head, Base: trunk, Path: "main.go", NewLine: 1, Message: "first"},
+	})
+	require.NoError(t, err)
+	_, err = pr.AddReviewRaw(author, testTime, pullrequest.ApproveVerdict, "", []pullrequest.LineComment{
+		{Commit: head, Base: trunk, Path: "main.go", NewLine: 1, Message: "second"},
+	})
+	require.NoError(t, err)
+	require.NoError(t, pr.Commit(t.Context()))
+
+	require.NoError(t, runPrDiff(env, prDiffOptions{}, []string{pr.Id().String()}))
+
+	out := env.Out.String()
+	require.Contains(t, out, " line one\n    ┃ John Doe, ")
+	require.Contains(t, out, "(reviewed)\n    ┃ first\n    ┃ John Doe, ")
+	require.Contains(t, out, "(approved)\n    ┃ second\n-line two\n")
+}
+
+func TestPrDiffCommentsOutsideTheDiff(t *testing.T) {
+	env, pr, trunk, head, author := newDiffCommentsPr(t)
+	older := commitMain(t, env, "line one\nline two\nline 3\n", trunk)
+	_, err := pr.AddReviewRaw(author, testTime, pullrequest.CommentVerdict, "", []pullrequest.LineComment{
+		{Commit: older, Base: trunk, Path: "main.go", NewLine: 2, Message: "on an older head"},
+		{Commit: head, Base: trunk, Path: "main.go", NewLine: 9, Message: "far away"},
+	})
+	require.NoError(t, err)
+	require.NoError(t, pr.Commit(t.Context()))
+
+	require.NoError(t, runPrDiff(env, prDiffOptions{}, []string{pr.Id().String()}))
+
+	header := fmt.Sprintf("    ┃ John Doe, %s (reviewed)\n", time.Unix(testTime, 0).Format("Mon Jan 2 15:04 2006"))
+	expected := `diff --git a/main.go b/main.go
+--- a/main.go
++++ b/main.go
+@@ -1,2 +1,2 @@
+ line one
+-line two
++line 2
+
+Comments not on a line of this diff:
+` + header + fmt.Sprintf("  main.go:2 @ %s [outdated]\n  > line two\n  on an older head\n", older.String()[:7]) +
+		header + fmt.Sprintf("  main.go:9 @ %s\n  > code not available (no line 9 in main.go)\n  far away\n", head.String()[:7])
+	require.Equal(t, expected, env.Out.String())
+}
+
+func TestPrDiffNoComments(t *testing.T) {
+	env, pr, trunk, head, author := newDiffCommentsPr(t)
+	_, err := pr.AddReviewRaw(author, testTime, pullrequest.CommentVerdict, "", []pullrequest.LineComment{
+		{Commit: head, Base: trunk, Path: "main.go", NewLine: 2, Message: "inline"},
+		{Commit: head, Base: trunk, Path: "main.go", NewLine: 9, Message: "listed"},
+	})
+	require.NoError(t, err)
+	require.NoError(t, pr.Commit(t.Context()))
+
+	require.NoError(t, runPrDiff(env, prDiffOptions{noComments: true}, []string{pr.Id().String()}))
+
+	require.Equal(t, `diff --git a/main.go b/main.go
+--- a/main.go
++++ b/main.go
+@@ -1,2 +1,2 @@
+ line one
+-line two
++line 2
+`, env.Out.String())
 }

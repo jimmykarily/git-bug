@@ -4,7 +4,7 @@ Display the diff of a pull request
 
 ### Synopsis
 
-Display the changes from the merge base of the target branch and the head, to the head, in unified format.
+Display the changes from the merge base of the target branch and the head, to the head, in unified format, with each line comment under the line it is about. Comments that are not on a line of this diff are listed after it.
 
 ```
 git-bug pr diff PR_ID [flags]
@@ -13,7 +13,8 @@ git-bug pr diff PR_ID [flags]
 ### Options
 
 ```
-  -h, --help   help for diff
+      --no-comments   Print the plain diff, which git apply accepts
+  -h, --help          help for diff
 ```
 
 ### SEE ALSO

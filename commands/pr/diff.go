@@ -1,9 +1,11 @@
 package prcmd
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"io"
+	"strings"
 
 	"github.com/git-bug/git-bug/commands/execenv"
 	"github.com/git-bug/git-bug/entities/pullrequest"
@@ -53,8 +55,9 @@ func unchangedLine(files []repository.FileDiff, path string, newLine int) (int, 
 
 // writeUnifiedDiff writes the files in unified diff format, with prefix in
 // front of every line. Files without a trailing newline are printed as if they
-// had one, because repository.DiffLine does not record it.
-func writeUnifiedDiff(w io.Writer, files []repository.FileDiff, prefix string) {
+// had one, because repository.DiffLine does not record it. When after is not
+// nil, it is called after each line of code, but not after header lines.
+func writeUnifiedDiff(w io.Writer, files []repository.FileDiff, prefix string, after func(file repository.FileDiff, line repository.DiffLine)) {
 	line := func(format string, args ...any) {
 		_, _ = fmt.Fprintf(w, "%s%s\n", prefix, fmt.Sprintf(format, args...))
 	}
@@ -106,7 +109,94 @@ func writeUnifiedDiff(w io.Writer, files []repository.FileDiff, prefix string) {
 					marker = "-"
 				}
 				line("%s%s", marker, l.Content)
+				if after != nil {
+					after(f, l)
+				}
 			}
 		}
+	}
+}
+
+// diffCommentDateLayout is the date layout of a comment printed in the diff.
+const diffCommentDateLayout = "Mon Jan 2 15:04 2006"
+
+// diffComment is a line comment with the review it belongs to.
+type diffComment struct {
+	review  *pullrequest.ReviewTimelineItem
+	comment pullrequest.LineComment
+}
+
+// onLine tells whether the comment is about the line of the file in the diff
+// that has the given head and merge base. A comment with a new line matches
+// an added or unchanged line. One with only an old line matches a deleted
+// line of the file that had the comment's old path at the base.
+func (d diffComment) onLine(head, base repository.Hash, f repository.FileDiff, l repository.DiffLine) bool {
+	c := d.comment
+	if c.Commit != head || c.Base != base {
+		return false
+	}
+	if c.NewLine != 0 {
+		return l.Type != repository.DiffLineDeleted && f.Path == c.Path && l.NewLine == c.NewLine
+	}
+	oldPath, fileOldPath := c.Path, f.Path
+	if c.OldPath != "" {
+		oldPath = c.OldPath
+	}
+	if f.OldPath != nil {
+		fileOldPath = *f.OldPath
+	}
+	return l.Type == repository.DiffLineDeleted && fileOldPath == oldPath && l.OldLine == c.OldLine
+}
+
+// header returns the line that starts a printed comment: the author, the date
+// and the verdict of its review.
+func (d diffComment) header(prefix string) string {
+	return fmt.Sprintf("%s┃ %s, %s (%s)\n", prefix, d.review.Author.DisplayName(),
+		d.review.UnixTime.Time().Format(diffCommentDateLayout), verdictWord(d.review.Verdict))
+}
+
+// printDiffWithComments prints the diff with each line comment under the line
+// it is about, then lists the comments that are not on a line of the diff.
+func printDiffWithComments(env *execenv.Env, snap *pullrequest.Snapshot, base repository.Hash, files []repository.FileDiff) {
+	var comments []diffComment
+	for _, item := range snap.Timeline {
+		if r, ok := item.(*pullrequest.ReviewTimelineItem); ok {
+			for _, c := range r.Comments {
+				comments = append(comments, diffComment{review: r, comment: c})
+			}
+		}
+	}
+
+	shown := make([]bool, len(comments))
+	var buf bytes.Buffer
+	writeUnifiedDiff(&buf, files, "", func(f repository.FileDiff, l repository.DiffLine) {
+		for i, c := range comments {
+			if !c.onLine(snap.Head, base, f, l) {
+				continue
+			}
+			shown[i] = true
+			buf.WriteString(c.header("    "))
+			for _, m := range strings.Split(c.comment.Message, "\n") {
+				if m == "" {
+					buf.WriteString("    ┃\n")
+				} else {
+					buf.WriteString("    ┃ " + m + "\n")
+				}
+			}
+		}
+	})
+	env.Out.Printf("%s", buf.String())
+
+	first := true
+	for i, c := range comments {
+		if shown[i] {
+			continue
+		}
+		if first {
+			env.Out.Printf("\nComments not on a line of this diff:\n")
+			first = false
+		}
+		env.Out.Printf("%s", c.header("    "))
+		printLineComment(env, snap, c.comment)
 	}
 }

@@ -44,7 +44,7 @@ type lineTarget struct {
 func reviewTemplate(id, title, source, target string, head repository.Hash, verdict pullrequest.Verdict, files []repository.FileDiff) string {
 	var buf bytes.Buffer
 	_, _ = fmt.Fprintf(&buf, reviewTemplateHeader, id, title, source, target, short(head), verdict)
-	writeUnifiedDiff(&buf, files, "> ")
+	writeUnifiedDiff(&buf, files, "> ", nil)
 	return buf.String()
 }
 
@@ -67,7 +67,7 @@ func renderFiles(files []repository.FileDiff) []renderedFile {
 	res := make([]renderedFile, 0, len(files))
 	for _, f := range files {
 		var buf bytes.Buffer
-		writeUnifiedDiff(&buf, []repository.FileDiff{f}, "")
+		writeUnifiedDiff(&buf, []repository.FileDiff{f}, "", nil)
 		rendered := strings.Split(strings.TrimSuffix(buf.String(), "\n"), "\n")
 
 		// The file header lines come first, then each hunk as its header

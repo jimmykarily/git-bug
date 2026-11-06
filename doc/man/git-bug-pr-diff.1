@@ -10,10 +10,14 @@ git-bug-pr-diff - Display the diff of a pull request
 
 
 .SH DESCRIPTION
-Display the changes from the merge base of the target branch and the head, to the head, in unified format.
+Display the changes from the merge base of the target branch and the head, to the head, in unified format, with each line comment under the line it is about. Comments that are not on a line of this diff are listed after it.
 
 
 .SH OPTIONS
+\fB--no-comments\fP[=false]
+	Print the plain diff, which git apply accepts
+
+.PP
 \fB-h\fP, \fB--help\fP[=false]
 	help for diff
 
