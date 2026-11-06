@@ -28,7 +28,7 @@ func NewPullRequestCommand(env *execenv.Env) *cobra.Command {
 
 	// The flag turns colors off as soon as it is parsed, for this command and
 	// every subcommand, without relying on a PersistentPreRun that a
-	// subcommand'"'"'s own PreRunE would shadow.
+	// subcommand's own PreRunE would shadow.
 	cmd.PersistentFlags().BoolFunc("no-colors", "Do not color the output", func(value string) error {
 		off, err := strconv.ParseBool(value)
 		if err != nil {
@@ -39,6 +39,7 @@ func NewPullRequestCommand(env *execenv.Env) *cobra.Command {
 		}
 		return nil
 	})
+	cmd.PersistentFlags().Lookup("no-colors").DefValue = "false"
 
 	cmd.AddCommand(newPrNewCommand(env))
 	cmd.AddCommand(newPrShowCommand(env))

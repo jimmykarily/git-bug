@@ -2,6 +2,7 @@ package prcmd
 
 import (
 	"bytes"
+	"path/filepath"
 	"testing"
 
 	"github.com/fatih/color"
@@ -9,6 +10,7 @@ import (
 
 	"github.com/git-bug/git-bug/entities/pullrequest"
 	"github.com/git-bug/git-bug/repository"
+	"github.com/git-bug/git-bug/repository/repotest"
 )
 
 // forceColors turns colors on for the test.
@@ -123,9 +125,9 @@ func TestPrDiffColors(t *testing.T) {
 	out := env.Out.String()
 	require.Contains(t, out, "\x1b[31m-line two\x1b[0m\n")
 	require.Contains(t, out, "\x1b[32m+line 2\x1b[0m\n")
-	require.Contains(t, out, "\x1b[2m    ┃\x1b[22m \x1b[35mJohn Doe\x1b[0m\x1b[2m, ")
+	require.Contains(t, out, "\x1b[33;1m    ┃\x1b[0;22m \x1b[35mJohn Doe\x1b[0m\x1b[2m, ")
 	require.Contains(t, out, "\x1b[32mapproved\x1b[0m")
-	require.Contains(t, out, "\x1b[2m    ┃\x1b[22m why the change?\n")
+	require.Contains(t, out, "\x1b[33;1m    ┃\x1b[0;22m \x1b[1mwhy the change?\x1b[22m\n")
 
 	env.Out.Reset()
 	require.NoError(t, runPrDiff(env, prDiffOptions{noComments: true}, []string{pr.Id().String()}))
@@ -133,16 +135,34 @@ func TestPrDiffColors(t *testing.T) {
 }
 
 func TestNoColorsFlag(t *testing.T) {
-	env, _, _ := newTestEnvWithBranches(t)
-	forceColors(t)
-
-	cmd := NewPullRequestCommand(env)
-	show, _, err := cmd.Find([]string{"show"})
+	env, _, feature := newTestEnvWithBranches(t)
+	author, err := env.Backend.GetUserIdentity(t.Context())
 	require.NoError(t, err)
+	pr, _, err := env.Backend.PullRequests().NewRaw(author, testTime, "my pr", "", "feature", "trunk", feature)
+	require.NoError(t, err)
+	require.NoError(t, pr.Commit(t.Context()))
+	// The command opens the repository of the working directory and loads
+	// its own backend.
+	require.NoError(t, env.Backend.Close())
+	t.Chdir(filepath.Dir(env.Repo.(*repotest.GoGitRepo).GitDir))
 
-	require.NoError(t, show.ParseFlags([]string{"ID"}))
-	require.False(t, color.NoColor)
+	run := func(args ...string) string {
+		forceColors(t)
+		env.Out.Reset()
+		cmd := NewPullRequestCommand(env)
+		cmd.SetArgs(args)
+		require.NoError(t, cmd.Execute())
+		return env.Out.String()
+	}
 
-	require.NoError(t, show.ParseFlags([]string{"--no-colors", "ID"}))
-	require.True(t, color.NoColor)
+	require.Contains(t, run("show", pr.Id().String()), "\x1b[")
+	require.NotContains(t, run("show", "--no-colors", pr.Id().String()), "\x1b")
+	require.NotContains(t, run("--no-colors"), "\x1b")
+}
+
+func TestWriteDiffBinaryPlain(t *testing.T) {
+	forceColors(t)
+	var buf bytes.Buffer
+	writeDiff(&buf, []repository.FileDiff{{Path: "a.bin", IsBinary: true}}, "", true, nil)
+	require.Equal(t, "\x1b[1mdiff --git a/a.bin b/a.bin\x1b[22m\nBinary files differ\n", buf.String())
 }

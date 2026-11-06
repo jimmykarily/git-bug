@@ -6,6 +6,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/fatih/color"
 	"github.com/spf13/cobra"
 
 	"github.com/git-bug/git-bug/commands/execenv"
@@ -48,6 +49,7 @@ func runPrShow(env *execenv.Env, args []string) error {
 	}
 	env.Out.Printf("\nView the changes: git bug pr diff %s\n", colors.Cyan(pr.Id().Human()))
 
+	diffs := diffCache{}
 	for _, item := range snap.Timeline {
 		switch item := item.(type) {
 		case *pullrequest.CommentTimelineItem:
@@ -59,7 +61,7 @@ func runPrShow(env *execenv.Env, args []string) error {
 				env.Out.Printf("%s\n", item.Message)
 			}
 			for _, c := range item.Comments {
-				printLineComment(env, snap, c)
+				printLineComment(env, snap, c, diffs)
 			}
 		case *pullrequest.HeadTimelineItem:
 			env.Out.Printf("\n--- %s\n", entryTitle(item.Author, "set the head to "+short(item.Head), item.UnixTime))
@@ -71,7 +73,7 @@ func runPrShow(env *execenv.Env, args []string) error {
 	return nil
 }
 
-func printLineComment(env *execenv.Env, snap *pullrequest.Snapshot, c pullrequest.LineComment) {
+func printLineComment(env *execenv.Env, snap *pullrequest.Snapshot, c pullrequest.LineComment, diffs diffCache) {
 	outdated := ""
 	if c.Commit != snap.Head {
 		outdated = " " + colors.Dim("[outdated]")
@@ -93,7 +95,7 @@ func printLineComment(env *execenv.Env, snap *pullrequest.Snapshot, c pullreques
 	code, err := readLine(env.Ctx, env.Repo, commit, path, line)
 	switch {
 	case err == nil:
-		style := lineStyle(env, c)
+		style := lineStyle(env, c, diffs)
 		if style == nil {
 			env.Out.Printf("  > %s\n", code)
 		} else {
@@ -115,14 +117,34 @@ func printLineComment(env *execenv.Env, snap *pullrequest.Snapshot, c pullreques
 	}
 }
 
+// diffCache holds the diffs computed during one command run, by base and
+// commit, so that many comments on the same commits compute each diff once.
+type diffCache map[[2]repository.Hash][]repository.FileDiff
+
+func (d diffCache) get(env *execenv.Env, base, commit repository.Hash) ([]repository.FileDiff, error) {
+	key := [2]repository.Hash{base, commit}
+	if files, ok := d[key]; ok {
+		return files, nil
+	}
+	files, err := env.Repo.DiffCommits(env.Ctx, base, commit)
+	if err != nil {
+		return nil, err
+	}
+	d[key] = files
+	return files, nil
+}
+
 // lineStyle returns the color of the code line a comment is about: green when
 // the comment's diff adds the line, red when it removes it, and nil for an
 // unchanged line or when the diff cannot be computed.
-func lineStyle(env *execenv.Env, c pullrequest.LineComment) func(a ...interface{}) string {
+func lineStyle(env *execenv.Env, c pullrequest.LineComment, diffs diffCache) func(a ...interface{}) string {
+	if color.NoColor {
+		return nil
+	}
 	if c.NewLine == 0 {
 		return colors.Red
 	}
-	files, err := env.Repo.DiffCommits(env.Ctx, c.Base, c.Commit)
+	files, err := diffs.get(env, c.Base, c.Commit)
 	if err != nil {
 		return nil
 	}

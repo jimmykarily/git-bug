@@ -750,9 +750,10 @@ their tests. Colors come from `util/colors`, as in `commands/bug`.
   IDs cyan, statuses yellow, author names magenta.
 - `pr diff`, as `git diff` colors by default: `diff --git`, mode, rename,
   `---` and `+++` lines bold; `@@` lines cyan; added lines green; removed
-  lines red; unchanged lines plain. Inline comments: the `┃` bar and the
-  date dimmed or plain, the author magenta, the verdict word colored as
-  below, the message plain.
+  lines red; unchanged lines plain. Inline comments: the `┃` bar bold
+  yellow on every comment line (header and empty lines included), the author
+  magenta, the date dimmed, the verdict word colored as below, the message
+  text bold.
 - Verdict words, wherever they appear: `approved` green, `requested changes`
   red, `reviewed` yellow. `[outdated]` and the "code not available" notes
   dimmed (or plain if `util/colors` has no dim style; adding one there is

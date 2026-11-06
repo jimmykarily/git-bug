@@ -87,7 +87,7 @@ func writeDiff(w io.Writer, files []repository.FileDiff, prefix string, colored 
 		}
 		line("diff --git a/%s b/%s", oldPath, f.Path)
 		if f.IsBinary {
-			line("Binary files differ")
+			lineWith(nil, "Binary files differ")
 			continue
 		}
 		switch {
@@ -173,7 +173,7 @@ const commentIndent = "    ┃"
 // header returns the line that starts a printed comment: the author, the date
 // and the verdict of its review.
 func (d diffComment) header() string {
-	return fmt.Sprintf("%s %s%s (%s)\n", colors.Dim(commentIndent), colors.Magenta(d.review.Author.DisplayName()),
+	return fmt.Sprintf("%s %s%s (%s)\n", colors.YellowBold(commentIndent), colors.Magenta(d.review.Author.DisplayName()),
 		colors.Dim(", "+d.review.UnixTime.Time().Format(diffCommentDateLayout)), coloredVerdict(d.review.Verdict))
 }
 
@@ -199,14 +199,15 @@ func printDiffWithComments(env *execenv.Env, snap *pullrequest.Snapshot, base re
 			env.Out.Printf("%s", c.header())
 			for _, m := range strings.Split(c.comment.Message, "\n") {
 				if m == "" {
-					env.Out.Printf("%s\n", colors.Dim(commentIndent))
+					env.Out.Printf("%s\n", colors.YellowBold(commentIndent))
 				} else {
-					env.Out.Printf("%s %s\n", colors.Dim(commentIndent), m)
+					env.Out.Printf("%s %s\n", colors.YellowBold(commentIndent), colors.Bold(m))
 				}
 			}
 		}
 	})
 
+	diffs := diffCache{}
 	first := true
 	for i, c := range comments {
 		if shown[i] {
@@ -217,6 +218,6 @@ func printDiffWithComments(env *execenv.Env, snap *pullrequest.Snapshot, base re
 			first = false
 		}
 		env.Out.Printf("%s", c.header())
-		printLineComment(env, snap, c.comment)
+		printLineComment(env, snap, c.comment, diffs)
 	}
 }
