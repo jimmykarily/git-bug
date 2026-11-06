@@ -89,13 +89,13 @@ func (c *RepoCache) RemoveAll(ctx context.Context) error {
 	return nil
 }
 
-// MergeAll will merge all the available remote bug and identities
+// MergeAll will merge all the available remote bugs, pull requests and identities
 func (c *RepoCache) MergeAll(ctx context.Context, remote string) <-chan entity.MergeResult {
 	out := make(chan entity.MergeResult)
 
 	dependency := [][]cacheMgmt{
 		{c.identities},
-		{c.bugs},
+		{c.bugs, c.pullRequests},
 	}
 
 	// run MergeAll according to entities dependencies and merge the results

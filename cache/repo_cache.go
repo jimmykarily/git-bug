@@ -9,6 +9,7 @@ import (
 
 	"github.com/git-bug/git-bug/entities/bug"
 	"github.com/git-bug/git-bug/entities/identity"
+	"github.com/git-bug/git-bug/entities/pullrequest"
 	"github.com/git-bug/git-bug/entity"
 	"github.com/git-bug/git-bug/repository"
 	"github.com/git-bug/git-bug/util/multierr"
@@ -66,8 +67,9 @@ type RepoCache struct {
 	// resolvers for all known entities and excerpts
 	resolvers entity.Resolvers
 
-	bugs       *RepoCacheBug
-	identities *RepoCacheIdentity
+	bugs         *RepoCacheBug
+	pullRequests *RepoCachePullRequest
+	identities   *RepoCacheIdentity
 
 	subcaches []cacheMgmt
 
@@ -106,6 +108,9 @@ func NewRepoCache(r repository.Repo, changes repository.ChangeSource) (*RepoCach
 	c.bugs = NewRepoCacheBug(r, c.getResolvers, c.GetUserIdentity)
 	c.subcaches = append(c.subcaches, c.bugs)
 
+	c.pullRequests = NewRepoCachePullRequest(r, c.getResolvers, c.GetUserIdentity)
+	c.subcaches = append(c.subcaches, c.pullRequests)
+
 	c.resolvers = entity.Resolvers{
 		&IdentityCache{}: entity.ResolverFunc[*IdentityCache](c.identities.Resolve),
 		&IdentityExcerpt{}: entity.ResolverFunc[*IdentityExcerpt](func(_ context.Context, id entity.Id) (*IdentityExcerpt, error) {
@@ -114,6 +119,10 @@ func NewRepoCache(r repository.Repo, changes repository.ChangeSource) (*RepoCach
 		&BugCache{}: entity.ResolverFunc[*BugCache](c.bugs.Resolve),
 		&BugExcerpt{}: entity.ResolverFunc[*BugExcerpt](func(_ context.Context, id entity.Id) (*BugExcerpt, error) {
 			return c.bugs.ResolveExcerpt(id)
+		}),
+		&PullRequestCache{}: entity.ResolverFunc[*PullRequestCache](c.pullRequests.Resolve),
+		&PullRequestExcerpt{}: entity.ResolverFunc[*PullRequestExcerpt](func(_ context.Context, id entity.Id) (*PullRequestExcerpt, error) {
+			return c.pullRequests.ResolveExcerpt(id)
 		}),
 	}
 
@@ -167,6 +176,11 @@ func NewRepoCacheNoEvents(r repository.Repo, changes repository.ChangeSource) (*
 // Bugs gives access to the Bug entities
 func (c *RepoCache) Bugs() *RepoCacheBug {
 	return c.bugs
+}
+
+// PullRequests gives access to the PullRequest entities
+func (c *RepoCache) PullRequests() *RepoCachePullRequest {
+	return c.pullRequests
 }
 
 // Identities gives access to the Identity entities
@@ -310,6 +324,8 @@ func (c *RepoCache) registerObserver(repoName string, typename string, observer 
 	switch typename {
 	case bug.Typename:
 		c.bugs.RegisterObserver(repoName, observer)
+	case pullrequest.Typename:
+		c.pullRequests.RegisterObserver(repoName, observer)
 	case identity.Typename:
 		c.identities.RegisterObserver(repoName, observer)
 	default:

@@ -866,7 +866,11 @@ func TestCacheRebuildsUnusableClocks(t *testing.T) {
 			require.NoError(t, err)
 			require.NoError(t, iden.Mutate(repo, func(m *identity.Mutator) { m.Name = "René" }))
 			require.NoError(t, iden.Commit(t.Context()))
-			require.Equal(t, before, iden.LastModificationLamports())
+			recorded := make(map[string]lamport.Time)
+			for _, name := range clocks {
+				recorded[name] = iden.LastModificationLamports()[name]
+			}
+			require.Equal(t, before, recorded)
 			require.NoError(t, cache.Close())
 
 			// and what was written reads back
