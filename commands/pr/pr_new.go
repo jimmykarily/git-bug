@@ -3,7 +3,6 @@ package prcmd
 import (
 	"errors"
 	"fmt"
-	"slices"
 
 	"github.com/spf13/cobra"
 
@@ -125,8 +124,7 @@ func runPrNew(env *execenv.Env, opts prNewOptions) error {
 
 // checkSomethingToReview fails when the source holds no commit that the target
 // lacks: the same branch, the same commit under another name, or a source
-// already merged into the target. Finding the target's ancestors walks its
-// whole history, which is slow on very large repositories.
+// already merged into the target.
 func checkSomethingToReview(env *execenv.Env, source, target string, head repository.Hash) error {
 	if source == target {
 		return fmt.Errorf("source and target are the same branch %q", source)
@@ -137,11 +135,15 @@ func checkSomethingToReview(env *execenv.Env, source, target string, head reposi
 		return err
 	}
 
-	ancestors, err := env.Repo.ListCommits(env.Ctx, targetCommit)
+	// The head is already in the target when it is their merge base.
+	base, err := env.Repo.MergeBase(env.Ctx, targetCommit, head)
+	if errors.Is(err, repository.ErrNotFound) {
+		return fmt.Errorf("%q and %q share no history", source, target)
+	}
 	if err != nil {
 		return err
 	}
-	if slices.Contains(ancestors, head) {
+	if base == head {
 		return fmt.Errorf("nothing to review: %q has no commits that %q does not have", source, target)
 	}
 

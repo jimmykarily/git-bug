@@ -41,6 +41,7 @@ func TestPrNew(t *testing.T) {
 		require.NoError(t, repo.SetBranch("trunk-copy", trunk))
 		require.NoError(t, repo.SetBranch("merged", feature))
 		require.NoError(t, repo.SetBranch("trunk-ahead", commitMain(t, env, "later\n", feature)))
+		require.NoError(t, repo.SetBranch("unrelated", commitMain(t, env, "other\n")))
 
 		cases := []struct {
 			name, source, target, err string
@@ -49,6 +50,7 @@ func TestPrNew(t *testing.T) {
 			{"same commit", "trunk-copy", "trunk", `nothing to review: "trunk-copy" has no commits that "trunk" does not have`},
 			{"already merged", "merged", "trunk-ahead", `nothing to review: "merged" has no commits that "trunk-ahead" does not have`},
 			{"unknown target", "feature", "nope", `branch "nope" not found locally or on any remote`},
+			{"no shared history", "unrelated", "trunk", `"unrelated" and "trunk" share no history`},
 		}
 		for _, c := range cases {
 			err := runPrNew(env, prNewOptions{
