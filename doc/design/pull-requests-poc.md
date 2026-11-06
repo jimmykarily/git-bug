@@ -234,19 +234,23 @@ above it, on whichever side that line is on, and all of them are submitted as
 one review. Blank lines inside a comment separate its paragraphs, and a comment
 ends at the next quoted line. Quoted lines tell where each comment goes: a
 `diff --git` or `+++ b/` line names the file, and an `@@` line names the hunk
-and the line numbers. The reviewer may delete whole files, whole hunks, or the
-end of a hunk. Any other change to the quoted lines, and a quoted line of code
-with no file and hunk header above it, is an error, so a comment is never
-placed on a line the reviewer did not mean. Leaving the text unchanged, or
-writing no summary and no comment, aborts the review.
+and the line numbers. Files and hunks must stay in the order of the diff. The
+reviewer may delete whole files, whole hunks, or the end of a hunk, and keeps
+the file and hunk header and every quoted line above the line they comment on.
+Other changes to the quoted lines are errors, as is a quoted line of code with
+no file and hunk header above it. One mistake cannot be detected: if the
+reviewer deletes the first lines of a hunk and the lines kept repeat them, the
+comment is placed on the deleted copy. When the review has no summary and no
+comment and its verdict is the preset one or `comment`, it is aborted and
+nothing is written.
 
 ```
 # Review of 0c8c916 "Add X" (feature -> trunk, head db6beb8)
 # First line: comment, approve or request-changes.
 # Text before the diff is the summary. Write a comment on the line(s) right
 # under the diff line it is about. Lines starting with # are ignored.
-# You may delete whole files, whole hunks, or the end of a hunk, and must keep
-# the other quoted lines as they are.
+# You may delete whole files, whole hunks, or the end of a hunk. Keep the file
+# and hunk header and every quoted line above the one you comment on.
 comment
 
 > diff --git a/main.go b/main.go

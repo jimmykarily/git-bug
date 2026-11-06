@@ -42,8 +42,8 @@ func TestReviewTemplate(t *testing.T) {
 # First line: comment, approve or request-changes.
 # Text before the diff is the summary. Write a comment on the line(s) right
 # under the diff line it is about. Lines starting with # are ignored.
-# You may delete whole files, whole hunks, or the end of a hunk, and must keep
-# the other quoted lines as they are.
+# You may delete whole files, whole hunks, or the end of a hunk. Keep the file
+# and hunk header and every quoted line above the one you comment on.
 approve
 
 > diff --git a/old.go b/main.go
@@ -280,4 +280,81 @@ func TestParseReviewRepeatedLine(t *testing.T) {
 			require.EqualError(t, err, "line 2: a quoted line of code needs its file and hunk header above it")
 		})
 	}
+}
+
+func TestParseReviewOrder(t *testing.T) {
+	newFile := func(path string) repository.FileDiff {
+		return repository.FileDiff{
+			Path:  path,
+			IsNew: true,
+			Hunks: []repository.DiffHunk{{OldStart: 0, OldLines: 0, NewStart: 1, NewLines: 3, Lines: []repository.DiffLine{
+				{Type: repository.DiffLineAdded, Content: "package a", NewLine: 1},
+				{Type: repository.DiffLineAdded, Content: "", NewLine: 2},
+				{Type: repository.DiffLineAdded, Content: "func f() {}", NewLine: 3},
+			}}},
+		}
+	}
+	twoFiles := []repository.FileDiff{newFile("a.go"), newFile("b.go")}
+	twoHunks := []repository.FileDiff{{
+		Path: "c.go",
+		Hunks: []repository.DiffHunk{
+			{OldStart: 1, OldLines: 1, NewStart: 1, NewLines: 2, Lines: []repository.DiffLine{
+				{Type: repository.DiffLineContext, Content: "one", OldLine: 1, NewLine: 1},
+				{Type: repository.DiffLineAdded, Content: "two", NewLine: 2},
+			}},
+			{OldStart: 9, OldLines: 1, NewStart: 10, NewLines: 2, Lines: []repository.DiffLine{
+				{Type: repository.DiffLineContext, Content: "nine", OldLine: 9, NewLine: 10},
+				{Type: repository.DiffLineAdded, Content: "ten", NewLine: 11},
+			}},
+		},
+	}}
+	const orderErr = "files and hunks must stay in the order of the diff"
+
+	for name, tc := range map[string]struct {
+		files []repository.FileDiff
+		text  string
+		err   string
+	}{
+		"next file's header lines deleted": {
+			files: twoFiles,
+			text: `comment
+> diff --git a/a.go b/a.go
+> new file mode 100644
+> --- /dev/null
+> +++ b/a.go
+> @@ -0,0 +1,3 @@
+> +package a
+> +
+> +func f() {}
+> @@ -0,0 +1,3 @@
+> +package a
+> +
+> +func f() {}
+on b.go
+`,
+			err: "line 10: " + orderErr,
+		},
+		"file before the current one": {
+			files: twoFiles,
+			text:  "comment\n> diff --git a/b.go b/b.go\n> diff --git a/a.go b/a.go\n",
+			err:   "line 3: " + orderErr,
+		},
+		"hunks reordered": {
+			files: twoHunks,
+			text:  "comment\n> +++ b/c.go\n> @@ -9,1 +10,2 @@\n>  nine\n> @@ -1,1 +1,2 @@\n>  one\nhere\n",
+			err:   "line 5: " + orderErr,
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, _, _, err := parseReview(tc.text, tc.files)
+			require.EqualError(t, err, tc.err)
+		})
+	}
+
+	t.Run("first hunk deleted", func(t *testing.T) {
+		text := "comment\n> diff --git a/c.go b/c.go\n> +++ b/c.go\n> @@ -9,1 +10,2 @@\n>  nine\n> +ten\nhere\n"
+		_, _, comments, err := parseReview(text, twoHunks)
+		require.NoError(t, err)
+		require.Equal(t, []lineTarget{{Path: "c.go", NewLine: 11, Message: "here"}}, comments)
+	})
 }

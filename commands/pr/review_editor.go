@@ -17,8 +17,8 @@ const reviewTemplateHeader = `# Review of %s %q (%s -> %s, head %s)
 # First line: comment, approve or request-changes.
 # Text before the diff is the summary. Write a comment on the line(s) right
 # under the diff line it is about. Lines starting with # are ignored.
-# You may delete whole files, whole hunks, or the end of a hunk, and must keep
-# the other quoted lines as they are.
+# You may delete whole files, whole hunks, or the end of a hunk. Keep the file
+# and hunk header and every quoted line above the one you comment on.
 %s
 
 `
@@ -105,6 +105,9 @@ func parseReview(edited string, files []repository.FileDiff) (verdict, summary s
 	diff := renderFiles(files)
 	var file *renderedFile
 	var hunk *renderedHunk
+	// Files and hunks must come in the order of the diff, so each header
+	// only looks after the current file and hunk.
+	fileIndex, hunkIndex := -1, -1
 	next := 0 // index in hunk.lines of the next expected line
 
 	const (
@@ -160,32 +163,42 @@ func parseReview(edited string, files []repository.FileDiff) (verdict, summary s
 				state = underLine
 
 			case strings.HasPrefix(quoted, "diff --git "), strings.HasPrefix(quoted, "+++ b/"):
-				file, hunk = nil, nil
+				found := -1
 				for j := range diff {
 					if slicesContainsTrimmed(diff[j].headers, quoted) {
-						file = &diff[j]
+						found = j
 						break
 					}
 				}
-				if file == nil {
+				switch {
+				case found < 0:
 					return "", "", nil, lineErr("this file is not in the diff")
+				// "+++ b/" may follow "diff --git" of the same file.
+				case found < fileIndex || (found == fileIndex && hunk != nil):
+					return "", "", nil, lineErr("files and hunks must stay in the order of the diff")
 				}
+				fileIndex, file = found, &diff[found]
+				hunkIndex, hunk = -1, nil
 
 			case strings.HasPrefix(quoted, "@@ "):
 				if file == nil {
 					return "", "", nil, lineErr("this hunk header has no file header above it")
 				}
-				hunk = nil
+				found := -1
 				for j := range file.hunks {
 					if trimRight(file.hunks[j].header) == quoted {
-						hunk = &file.hunks[j]
-						next = 0
+						found = j
 						break
 					}
 				}
-				if hunk == nil {
+				switch {
+				case found < 0:
 					return "", "", nil, lineErr("this hunk header is not in the diff of %s", file.path)
+				case found <= hunkIndex:
+					return "", "", nil, lineErr("files and hunks must stay in the order of the diff")
 				}
+				hunkIndex, hunk = found, &file.hunks[found]
+				next = 0
 
 			case hunk != nil:
 				return "", "", nil, lineErr("quoted lines inside a hunk must be kept as they are; you may delete whole files, whole hunks, or the end of a hunk")
