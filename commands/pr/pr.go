@@ -24,6 +24,10 @@ func NewPullRequestCommand(env *execenv.Env) *cobra.Command {
 
 	cmd.AddCommand(newPrNewCommand(env))
 	cmd.AddCommand(newPrShowCommand(env))
+	cmd.AddCommand(newPrCommentCommand(env))
+	cmd.AddCommand(newPrReviewCommand(env))
+	cmd.AddCommand(newPrHeadCommand(env))
+	cmd.AddCommand(newPrStatusCommand(env))
 
 	return cmd
 }
