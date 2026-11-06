@@ -52,10 +52,11 @@ func unchangedLine(files []repository.FileDiff, path string, newLine int) (int, 
 }
 
 // writeUnifiedDiff writes the files in unified diff format, with prefix in
-// front of every line.
+// front of every line. Files without a trailing newline are printed as if they
+// had one, because repository.DiffLine does not record it.
 func writeUnifiedDiff(w io.Writer, files []repository.FileDiff, prefix string) {
 	line := func(format string, args ...any) {
-		_, _ = fmt.Fprintf(w, prefix+format+"\n", args...)
+		_, _ = fmt.Fprintf(w, "%s%s\n", prefix, fmt.Sprintf(format, args...))
 	}
 
 	for _, f := range files {
@@ -66,6 +67,22 @@ func writeUnifiedDiff(w io.Writer, files []repository.FileDiff, prefix string) {
 		line("diff --git a/%s b/%s", oldPath, f.Path)
 		if f.IsBinary {
 			line("Binary files differ")
+			continue
+		}
+		switch {
+		case f.IsNew:
+			line("new file mode 100644")
+		case f.IsDelete:
+			line("deleted file mode 100644")
+		}
+		if f.OldPath != nil {
+			if len(f.Hunks) == 0 {
+				line("similarity index 100%%")
+			}
+			line("rename from %s", oldPath)
+			line("rename to %s", f.Path)
+		}
+		if len(f.Hunks) == 0 {
 			continue
 		}
 		if f.IsNew {

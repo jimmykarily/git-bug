@@ -49,6 +49,7 @@ func TestPrDiffNoMergeBase(t *testing.T) {
 
 func TestWriteUnifiedDiff(t *testing.T) {
 	old := "old.go"
+	pure := "pure.go"
 	files := []repository.FileDiff{
 		{
 			Path:  "new.go",
@@ -57,6 +58,8 @@ func TestWriteUnifiedDiff(t *testing.T) {
 				{Type: repository.DiffLineAdded, Content: "hello", NewLine: 1},
 			}}},
 		},
+		{Path: "empty.go", IsNew: true},
+		{Path: "moved.go", OldPath: &pure},
 		{
 			Path:     "gone.go",
 			IsDelete: true,
@@ -79,16 +82,26 @@ func TestWriteUnifiedDiff(t *testing.T) {
 	var buf bytes.Buffer
 	writeUnifiedDiff(&buf, files, "")
 	require.Equal(t, `diff --git a/new.go b/new.go
+new file mode 100644
 --- /dev/null
 +++ b/new.go
 @@ -0,0 +1,1 @@
 +hello
+diff --git a/empty.go b/empty.go
+new file mode 100644
+diff --git a/pure.go b/moved.go
+similarity index 100%
+rename from pure.go
+rename to moved.go
 diff --git a/gone.go b/gone.go
+deleted file mode 100644
 --- a/gone.go
 +++ /dev/null
 @@ -1,1 +0,0 @@
 -bye
 diff --git a/old.go b/renamed.go
+rename from old.go
+rename to renamed.go
 --- a/old.go
 +++ b/renamed.go
 @@ -1,2 +1,2 @@
@@ -102,6 +115,7 @@ Binary files differ
 	buf.Reset()
 	writeUnifiedDiff(&buf, files[:1], "> ")
 	require.Equal(t, `> diff --git a/new.go b/new.go
+> new file mode 100644
 > --- /dev/null
 > +++ b/new.go
 > @@ -0,0 +1,1 @@
