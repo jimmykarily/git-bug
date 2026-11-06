@@ -10,7 +10,7 @@ git-bug-pr-review - Submit a review of a pull request
 
 
 .SH DESCRIPTION
-Submit a review of a pull request
+Submit a review of a pull request. With neither --message nor --at, and unless --non-interactive is given, the editor opens on the diff of the pull request: write the summary above the diff, and each comment on the lines right under the diff line it is about.
 
 
 .SH OPTIONS
@@ -28,6 +28,10 @@ Submit a review of a pull request
 .PP
 \fB--at\fP=[]
 	Comment on a line of the head commit, as PATH:LINE:MESSAGE. Can be repeated
+
+.PP
+\fB--non-interactive\fP[=false]
+	Do not ask for user input
 
 .PP
 \fB-h\fP, \fB--help\fP[=false]

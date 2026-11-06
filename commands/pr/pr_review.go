@@ -8,7 +8,9 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/git-bug/git-bug/cache"
 	"github.com/git-bug/git-bug/commands/execenv"
+	"github.com/git-bug/git-bug/commands/input"
 	"github.com/git-bug/git-bug/entities/pullrequest"
 	"github.com/git-bug/git-bug/repository"
 	"github.com/git-bug/git-bug/util/text"
@@ -19,6 +21,7 @@ type prReviewOptions struct {
 	requestChanges bool
 	message        string
 	at             []string
+	nonInteractive bool
 }
 
 func newPrReviewCommand(env *execenv.Env) *cobra.Command {
@@ -27,6 +30,7 @@ func newPrReviewCommand(env *execenv.Env) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:     "review PR_ID",
 		Short:   "Submit a review of a pull request",
+		Long:    "Submit a review of a pull request. With neither --message nor --at, and unless --non-interactive is given, the editor opens on the diff of the pull request: write the summary above the diff, and each comment on the lines right under the diff line it is about.",
 		Args:    cobra.ExactArgs(1),
 		PreRunE: execenv.LoadBackend(env, execenv.EnsureUser()),
 		RunE: execenv.CloseBackend(env, func(cmd *cobra.Command, args []string) error {
@@ -43,6 +47,7 @@ func newPrReviewCommand(env *execenv.Env) *cobra.Command {
 		"Provide the review summary from the command line")
 	flags.StringArrayVar(&options.at, "at", nil,
 		"Comment on a line of the head commit, as PATH:LINE:MESSAGE. Can be repeated")
+	flags.BoolVar(&options.nonInteractive, "non-interactive", false, "Do not ask for user input")
 
 	cmd.MarkFlagsMutuallyExclusive("approve", "request-changes")
 
@@ -55,6 +60,18 @@ func runPrReview(env *execenv.Env, opts prReviewOptions, args []string) error {
 		return err
 	}
 	head := pr.Snapshot().Head
+
+	verdict := pullrequest.CommentVerdict
+	switch {
+	case opts.approve:
+		verdict = pullrequest.ApproveVerdict
+	case opts.requestChanges:
+		verdict = pullrequest.RequestChangesVerdict
+	}
+
+	if !opts.nonInteractive && opts.message == "" && len(opts.at) == 0 {
+		return runPrReviewEditor(env, pr, verdict)
+	}
 
 	var base repository.Hash
 	var files []repository.FileDiff
@@ -89,15 +106,56 @@ func runPrReview(env *execenv.Env, opts prReviewOptions, args []string) error {
 		comments = append(comments, c)
 	}
 
-	verdict := pullrequest.CommentVerdict
-	switch {
-	case opts.approve:
-		verdict = pullrequest.ApproveVerdict
-	case opts.requestChanges:
-		verdict = pullrequest.RequestChangesVerdict
+	if _, err := pr.AddReview(env.Ctx, verdict, text.Cleanup(opts.message), comments); err != nil {
+		return err
+	}
+	if err := pr.Commit(env.Ctx); err != nil {
+		return err
 	}
 
-	if _, err := pr.AddReview(env.Ctx, verdict, text.Cleanup(opts.message), comments); err != nil {
+	env.Out.Printf("review added to %s\n", pr.Id().Human())
+	return nil
+}
+
+// runPrReviewEditor opens the editor on the diff of the pull request and
+// submits the review written there.
+func runPrReviewEditor(env *execenv.Env, pr *cache.PullRequestCache, verdict pullrequest.Verdict) error {
+	snap := pr.Snapshot()
+	base, files, err := prDiff(env, snap)
+	if err != nil {
+		return fmt.Errorf("computing the diff: %w", err)
+	}
+
+	template := reviewTemplate(pr.Id().Human(), snap.Title, snap.Source, snap.Target, snap.Head, verdict, files)
+	raw, err := input.LaunchEditorWithTemplate(env.Backend, reviewFilename, template)
+	if err != nil {
+		return err
+	}
+
+	name, summary, targets, err := parseReview(raw, files)
+	if err != nil {
+		return err
+	}
+	if raw == template || name == "" || (name == pullrequest.CommentVerdict.String() && summary == "" && len(targets) == 0) {
+		env.Out.Println("Empty review, aborting.")
+		return nil
+	}
+	verdict, _ = verdictByName(name)
+
+	comments := make([]pullrequest.LineComment, 0, len(targets))
+	for _, t := range targets {
+		comments = append(comments, pullrequest.LineComment{
+			Commit:  snap.Head,
+			Base:    base,
+			Path:    t.Path,
+			OldPath: t.OldPath,
+			OldLine: t.OldLine,
+			NewLine: t.NewLine,
+			Message: t.Message,
+		})
+	}
+
+	if _, err := pr.AddReview(env.Ctx, verdict, summary, comments); err != nil {
 		return err
 	}
 	if err := pr.Commit(env.Ctx); err != nil {

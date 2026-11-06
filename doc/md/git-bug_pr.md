@@ -20,6 +20,7 @@ git-bug pr [flags]
 
 * [git-bug](git-bug.md)	 - A bug tracker embedded in Git
 * [git-bug pr comment](git-bug_pr_comment.md)	 - Add a comment to a pull request
+* [git-bug pr diff](git-bug_pr_diff.md)	 - Display the diff of a pull request
 * [git-bug pr head](git-bug_pr_head.md)	 - Record a new head commit of a pull request
 * [git-bug pr new](git-bug_pr_new.md)	 - Open a new pull request
 * [git-bug pr review](git-bug_pr_review.md)	 - Submit a review of a pull request
