@@ -88,3 +88,23 @@ func TestPrShowOutdatedAndMissing(t *testing.T) {
 	require.Contains(t, out, fmt.Sprintf("--- John Doe set the head to %s on %s\n", newHead.String()[:7], d))
 	require.Contains(t, out, fmt.Sprintf("--- John Doe set the status to merged on %s\n", d))
 }
+
+func TestPrShowEmptyMessage(t *testing.T) {
+	env, trunk, feature := newTestEnvWithBranches(t)
+	author, err := env.Backend.GetUserIdentity(t.Context())
+	require.NoError(t, err)
+
+	pr, _, err := env.Backend.PullRequests().NewRaw(author, testTime, "my pr", "", "feature", "trunk", feature)
+	require.NoError(t, err)
+	require.NoError(t, pr.Commit(t.Context()))
+
+	require.NoError(t, runPrShow(env, []string{pr.Id().String()}))
+
+	expected := fmt.Sprintf(`my pr [open]
+feature -> trunk, head %[1]s
+opened by John Doe on %[2]s
+
+View the changes: git diff %[3]s...%[4]s
+`, feature.String()[:7], testDate(), trunk, feature)
+	require.Equal(t, expected, env.Out.String())
+}

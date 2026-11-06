@@ -1,6 +1,7 @@
 package prcmd
 
 import (
+	"cmp"
 	"slices"
 	"strings"
 
@@ -45,7 +46,7 @@ func runPr(env *execenv.Env) error {
 	}
 
 	slices.SortStableFunc(excerpts, func(a, b *cache.PullRequestExcerpt) int {
-		return int(a.CreateLamportTime - b.CreateLamportTime)
+		return cmp.Compare(a.CreateLamportTime, b.CreateLamportTime)
 	})
 
 	for _, p := range excerpts {

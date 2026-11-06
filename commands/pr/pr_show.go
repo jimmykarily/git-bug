@@ -10,6 +10,7 @@ import (
 	"github.com/git-bug/git-bug/entities/identity"
 	"github.com/git-bug/git-bug/entities/pullrequest"
 	"github.com/git-bug/git-bug/repository"
+	"github.com/git-bug/git-bug/util/text"
 	"github.com/git-bug/git-bug/util/timestamp"
 )
 
@@ -44,7 +45,9 @@ func runPrShow(env *execenv.Env, args []string) error {
 	env.Out.Printf("%s [%s]\n", snap.Title, snap.Status)
 	env.Out.Printf("%s -> %s, head %s\n", snap.Source, snap.Target, short(snap.Head))
 	env.Out.Printf("opened by %s on %s\n", snap.Author.DisplayName(), snap.CreateTime.Format(dateLayout))
-	env.Out.Printf("\n%s\n", snap.Message)
+	if !text.Empty(snap.Message) {
+		env.Out.Printf("\n%s\n", snap.Message)
+	}
 	env.Out.Printf("\nView the changes: git diff %s...%s\n", target, snap.Head)
 
 	for _, item := range snap.Timeline {

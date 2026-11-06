@@ -40,6 +40,8 @@ func TestPrReview(t *testing.T) {
 		"missing file":      "other.go:1:nope",
 		"malformed":         "main.go",
 		"bad line number":   "main.go:x:nope",
+		"empty path":        ":1:nope",
+		"empty message":     "main.go:1:",
 	} {
 		t.Run(name, func(t *testing.T) {
 			before := len(pr.Snapshot().Timeline)

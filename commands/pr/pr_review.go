@@ -103,5 +103,11 @@ func parseAt(at string) (pullrequest.LineComment, error) {
 	if err != nil || line < 1 {
 		return pullrequest.LineComment{}, fmt.Errorf("--at %q: the line must be a number of at least 1", at)
 	}
+	if text.Empty(parts[0]) {
+		return pullrequest.LineComment{}, fmt.Errorf("--at %q: the path is empty", at)
+	}
+	if text.Empty(parts[2]) {
+		return pullrequest.LineComment{}, fmt.Errorf("--at %q: the message is empty", at)
+	}
 	return pullrequest.LineComment{Path: parts[0], Line: line, Message: parts[2]}, nil
 }
