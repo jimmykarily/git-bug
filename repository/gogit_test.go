@@ -313,3 +313,40 @@ func TestGoGitRepo_DiffCommitsSubmodule(t *testing.T) {
 	require.False(t, diffs[0].IsNew)
 	require.True(t, diffs[0].IsDelete)
 }
+
+func TestGoGitRepo_ReadCommitSSHSigned(t *testing.T) {
+	repo := newTestGoGitRepo(t, true)
+	ctx := t.Context()
+
+	tree, err := repo.StoreTree(ctx, nil)
+	require.NoError(t, err)
+	parent, err := repo.StoreCommit(ctx, tree)
+	require.NoError(t, err)
+
+	// a commit signed with an SSH key, as `git commit -S` writes it with
+	// gpg.format=ssh
+	sig := object.Signature{Name: "Signer", Email: "signer@example.com"}
+	commit := object.Commit{
+		Author:       sig,
+		Committer:    sig,
+		Message:      "signed with an SSH key\n",
+		TreeHash:     plumbing.NewHash(tree.String()),
+		ParentHashes: []plumbing.Hash{plumbing.NewHash(parent.String())},
+		PGPSignature: "-----BEGIN SSH SIGNATURE-----\nU1NIU0lHAAAAAQ==\n-----END SSH SIGNATURE-----\n",
+	}
+	obj := repo.r.Storer.NewEncodedObject()
+	require.NoError(t, commit.Encode(obj))
+	h, err := repo.r.Storer.SetEncodedObject(obj)
+	require.NoError(t, err)
+	signed := Hash(h.String())
+
+	read, err := repo.ReadCommit(ctx, signed)
+	require.NoError(t, err)
+	require.Equal(t, []Hash{parent}, read.Parents)
+	require.Nil(t, read.Signature)
+	require.Nil(t, read.SignedData)
+
+	commits, err := repo.ListCommits(ctx, signed)
+	require.NoError(t, err)
+	require.Equal(t, []Hash{parent, signed}, commits)
+}

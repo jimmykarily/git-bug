@@ -544,7 +544,10 @@ func (repo *GoGitRepo) ReadCommit(ctx context.Context, hash Hash) (Commit, error
 		TreeHash: Hash(commit.TreeHash.String()),
 	}
 
-	if commit.PGPSignature != "" {
+	// Only OpenPGP signatures are read: they are the ones git-bug writes and
+	// verifies. A commit signed another way, such as with an SSH key, reads as
+	// unsigned.
+	if strings.HasPrefix(commit.PGPSignature, "-----BEGIN PGP SIGNATURE-----") {
 		// I can't find a way to just remove the signature when reading the encoded commit so we need to
 		// re-encode the commit without signature.
 
