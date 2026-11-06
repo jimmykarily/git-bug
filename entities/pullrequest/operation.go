@@ -34,6 +34,14 @@ func operationUnmarshaler(_ context.Context, raw json.RawMessage, _ entity.Resol
 	switch t.OperationType {
 	case CreateOp:
 		op = &CreateOperation{}
+	case AddCommentOp:
+		op = &AddCommentOperation{}
+	case AddReviewOp:
+		op = &AddReviewOperation{}
+	case SetHeadOp:
+		op = &SetHeadOperation{}
+	case SetStatusOp:
+		op = &SetStatusOperation{}
 	default:
 		return dag.NewUnknownOp[*Snapshot](raw)
 	}
