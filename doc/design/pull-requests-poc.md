@@ -215,25 +215,278 @@ Tests are written before the code, following the existing patterns:
 
 ## Work plan
 
-Each step is one commit, with tests written first, and leaves `go test ./...`
-passing.
+Each step below is one commit. Tests are written first and fail before the code
+exists. Every step ends with `go test ./...` and `go vet ./...` passing.
+Commits use the repository's existing message style (`area: summary`).
 
-1. This document.
-2. `entities/pullrequest`: the status and verdict types, `CreateOp`, the
-   current state, the record type definition and its read, merge and remove
-   functions.
-3. `entities/pullrequest`: `AddCommentOp`, `AddReviewOp`, `SetHeadOp`,
-   `SetStatusOp`, each with its timeline item.
-4. `cache`: the PR summary, the wrapper for reading and changing a PR, the
-   cache for all PRs, and its registration.
-   Includes the cache reload test and the push and pull test.
-5. `commands/pr`: `new`, the list, and `show`.
-6. `commands/pr`: `comment`, `review`, `head`, `status`.
-7. Documentation: generated CLI docs (`doc/man`, `doc/md`) and the
-   `doc/feature-matrix.md` row for pull requests.
+Step 1 is this document.
 
-After step 7, a short demo script in the PR description shows two clones
-exchanging a PR and a review through a bare remote.
+### Rules for every step
+
+- New code follows the matching bug code closely (same file layout, same naming
+  patterns, same test helpers). When in doubt, copy the bug pattern.
+- No change to existing behaviour or existing test expectations.
+- Changes to existing files are limited to the ones each step names.
+- Comments in code describe what the code does now, in plain words.
+
+### Inputs that are easy to get wrong
+
+Each of these has a test in the step that owns the code:
+
+- A review line comment on a file or line that does not exist at the head:
+  `pr review` fails before writing anything (step 6).
+- A line comment whose commit is missing from the clone: `pr show` still
+  prints the comment, with the "code not available" note (step 5).
+- A branch that exists only as `refs/remotes/<remote>/<name>`: it is found
+  (step 4).
+- Pulling PRs into a second clone: they show up after `git bug pull` (step 4).
+- A short or malformed commit ID in `--commit`: rejected with a clear message
+  (step 6).
+
+### Step 2: the PR record type and its creation
+
+Files: create `entities/pullrequest/pullrequest.go`, `status.go`, `verdict.go`,
+`operation.go`, `op_create.go`, `snapshot.go`, `timeline.go`, `actions.go`, and
+their `_test.go` files.
+
+Names later steps rely on:
+
+- `const Typename = "pullrequest"`, `const Namespace = "pullrequests"`, format
+  version `1`.
+- `type Status int` with `OpenStatus = 1`, `ClosedStatus`, `MergedStatus`;
+  `String()` gives `open`, `closed`, `merged`; `Validate() error`;
+  `StatusFromString(string) (Status, error)`.
+- `type Verdict int` with `CommentVerdict = 1`, `ApproveVerdict`,
+  `RequestChangesVerdict`; `String()` gives `comment`, `approve`,
+  `request-changes`; `Validate() error`.
+- Operation types, in this order from 1: `CreateOp`, `AddCommentOp`,
+  `AddReviewOp`, `SetHeadOp`, `SetStatusOp`. Unknown types go through
+  `dag.NewUnknownOp`, as in `entities/bug/operation.go`.
+- `type Operation = dag.OperationWithApply[*Snapshot]`,
+  `type Mutable = dag.Mutable[*Snapshot, Operation]`.
+- `type PullRequest struct{ *dag.Entity }` with `New()`, `Read`,
+  `ReadWithResolver`, `Validate` (first operation is the only `CreateOp`),
+  `Append`, `CommitOperations`, `Operations`, `Compile` (status starts as
+  `OpenStatus`), `FirstOp`.
+- `actions.go`: `MergeAll`, `Remove`, `RemoveAll`, `EnsureClocks`, each a thin
+  call into `dag` like `entities/bug/bug_actions.go`.
+- `CreateOperation` with JSON fields `title`, `message`, `source`, `target`,
+  `head` (a `repository.Hash`). `NewCreateOp(author identity.Interface,
+  unixTime int64, title, message, source, target string, head repository.Hash)`
+  and `Create(...same...) (*PullRequest, *CreateOperation, error)`. Validation:
+  title as for bugs, message printable, source and target non-empty single
+  lines, head `IsValid()`.
+- `Snapshot` fields: `Title`, `Message`, `Author`, `CreateTime`, `Source`,
+  `Target`, `Head`, `Status`, `Timeline []TimelineItem`, `Operations`. Methods
+  `Id()`, `AllOperations()`, `AppendOperation()`, `Clone()` (the cache needs
+  it; cloning the slices is enough because timeline items are never edited),
+  `EditTime()`.
+- `type TimelineItem interface{ CombinedId() entity.CombinedId }`. Creation adds
+  no timeline item; the title and message are shown in the header.
+
+Tests:
+
+- `TestCreateSerialize`: `dagtest.SerializeRoundTripTest` on `NewCreateOp`.
+- `TestCreateValidate`: empty title, empty source, empty target, and the head
+  `"abc"` each fail; a full valid op passes.
+- `TestStatusFromString` and `TestVerdictString`: every value round-trips;
+  `"nope"` fails.
+- `TestPullRequestCommitLoad`: create a PR with `Create`, commit it to a
+  `repotest.NewGoGitRepo`, read it back with `Read`, and compare the snapshot's
+  title, source, target, head, status `OpenStatus` and author id.
+
+### Step 3: the other operations
+
+Files: create `entities/pullrequest/op_add_comment.go`, `op_add_review.go`,
+`op_set_head.go`, `op_set_status.go` and their tests; add the new cases to
+`operation.go`.
+
+- `AddCommentOperation{Message}`, timeline item `CommentTimelineItem{Author,
+  UnixTime, Message}`. `AddComment(pr Mutable, author, unixTime, message)
+  (*AddCommentOperation, error)`. An empty message is invalid.
+- `type LineComment struct{ Commit repository.Hash; Path string; Line int;
+  Message string }` with JSON names `commit`, `path`, `line`, `message`, and
+  `Validate() error` (valid commit, non-empty path, line at least 1, non-empty
+  printable message).
+- `AddReviewOperation{Verdict, Message, Comments []LineComment}`, timeline item
+  `ReviewTimelineItem{Author, UnixTime, Verdict, Message, Comments}`.
+  `AddReview(pr Mutable, author, unixTime, verdict, message, comments)
+  (*AddReviewOperation, error)`. A `comment` verdict with no message and no
+  line comments is invalid.
+- `SetHeadOperation{Head}`, timeline item `HeadTimelineItem{Author, UnixTime,
+  Head}`; applying it sets `Snapshot.Head`. `SetHead(pr Mutable, author,
+  unixTime, head)`.
+- `SetStatusOperation{Status}`, timeline item `StatusTimelineItem{Author,
+  UnixTime, Status}`; applying it sets `Snapshot.Status`, any status to any
+  status. `SetStatus(pr Mutable, author, unixTime, status)`.
+- All `UnixTime` fields are `timestamp.Timestamp`, as in bugs.
+
+Tests:
+
+- A serialize round-trip test per operation.
+- `TestAddReviewValidate`: an empty review, a line comment with line 0, an
+  empty path, or a bad commit each fail; an approval with no message passes.
+- `TestSnapshotTimeline`: apply create, comment, review, head change, and the
+  statuses merged then open; check the timeline has five entries of the right
+  types in order, `Head` is the new commit, the status is `OpenStatus`, and
+  the review's line comment still holds the old commit.
+
+### Step 4: the cache
+
+Files: create `cache/pullrequest_cache.go`, `cache/pullrequest_excerpt.go`,
+`cache/pullrequest_subcache.go`, `cache/pullrequest_test.go`. Modify
+`cache/repo_cache.go` (field, constructor, `PullRequests()` accessor, resolvers,
+observer switch) and `cache/repo_cache_common.go` (`MergeAll` list becomes
+`{c.identities}, {c.bugs, c.pullRequests}`, since PRs depend only on
+identities).
+
+- `PullRequestCache` wraps
+  `CachedEntityBase[*pullrequest.Snapshot, pullrequest.Operation]` with
+  `AddComment(ctx, message)`, `AddReview(ctx, verdict, message, comments)`,
+  `SetHead(ctx, head)`, `SetStatus(ctx, status)`. Each uses the current user
+  identity and `time.Now()`, and stages the operation; the caller commits.
+- `PullRequestExcerpt`: id, create and edit lamport times, create and edit unix
+  times, `AuthorId`, `Title`, `Status`, `Source`, `Target`.
+- `RepoCachePullRequest` embeds the generic `SubCache`, built like
+  `NewRepoCacheBug`. The index data is the title, the message, and every
+  comment and review message. Methods:
+  - `New(ctx, title, message, source, target string, head repository.Hash)
+    (*PullRequestCache, *pullrequest.CreateOperation, error)`, staged like
+    bug creation.
+  - `ResolveBranch(ctx, name string) (repository.Hash, error)`: the local
+    `refs/heads/<name>` if present; otherwise every remote's
+    `refs/remotes/<remote>/<name>`. It fails with
+    `branch "<name>" not found locally or on any remote` when none exist, and
+    with `branch "<name>" points to different commits on remotes <a>, <b>`
+    when they disagree.
+
+Tests:
+
+- `TestPullRequestCacheReload`: create a PR, add a comment, a review, a head
+  change and a status change, commit, close the cache, open a new one on the
+  same repository, and read the same snapshot back (title, head, status,
+  timeline length 4).
+- `TestPullRequestPushPull`: with `repotest.SetupGoGitReposAndRemote`, A
+  creates and reviews a PR and pushes; B pulls and sees one PR with the same
+  title and review; B comments and pushes; A pulls and sees the comment. This
+  test fails if `MergeAll` is not updated.
+- `TestResolveBranch`: a local branch; a branch only under
+  `refs/remotes/origin/`; a missing branch; two remotes that disagree.
+
+### Step 5: `git bug pr`, `pr new` and `pr show`
+
+Files: create `commands/pr/pr.go` (the `pr` command and the list),
+`pr_new.go`, `pr_show.go`, `code.go`, `testenv_test.go`, and the tests. Modify
+`commands/root.go` to add the `pr` command to the entity group.
+
+- The package is `prcmd`, with `NewPullRequestCommand(env *execenv.Env)
+  *cobra.Command`. IDs are resolved with
+  `env.Backend.PullRequests().ResolvePrefix`.
+- The list prints one line per PR, oldest first:
+  `<short id>\t<status>\t<title>\t<source> -> <target>\t<author name>`.
+- `pr new`: flags `--source`, `--target` (required), `-t/--title`,
+  `-m/--message`, `-F/--file`, `--non-interactive`. Title and message input
+  reuse `commands/bug/input` (`BugCreateEditorInput`, `BugCreateFileInput`).
+  The source defaults to the checked-out branch from `BrowseRepo().Head()`,
+  and fails with `not on a branch, use --source` otherwise. The head comes
+  from `ResolveBranch(source)`. It prints `<short id> created`.
+- `code.go`: `readLine(ctx, browse repository.RepoBrowse, commit
+  repository.Hash, path string, line int) (string, error)`, which reads the
+  file with `BlobAtPath`. It returns `errCommitMissing` when the commit is not
+  in the clone (checked first with `ReadCommit`), and `errNoSuchLine` when the
+  file or line does not exist.
+- `pr show` prints:
+
+  ```
+  <title> [<status>]
+  <source> -> <target>, head <short head>
+  opened by <author> on <date>
+
+  <message>
+
+  View the changes: git diff <target commit>...<head>
+
+  --- <author> commented on <date>
+  <message>
+
+  --- <author> approved on <date>
+  <summary>
+    <path>:<line> @ <short commit> [outdated]
+    > <code line, or: code not available (commit <short> not in this clone)>
+    <message>
+
+  --- <author> set the head to <short head> on <date>
+  --- <author> set the status to merged on <date>
+  ```
+
+  Verdict words are `reviewed`, `approved`, `requested changes`. `[outdated]`
+  appears only when the comment's commit differs from the current head. The
+  date format is `Mon Jan 2 15:04:05 2006 -0700`. Short commits are 7
+  characters. If the target branch cannot be resolved, the diff line uses the
+  branch name.
+
+Test helper (`testenv_test.go`): `newTestEnvWithBranches(t)` builds on
+`commands/bug/testenv.NewTestEnvAndUser`. It commits a `trunk` branch with
+`main.go` holding `line one\nline two\n`, and a `feature` branch on top that
+adds `line three\n`. It uses `env.Repo` (`StoreData`, `StoreTree`,
+`StoreCommit`) and `repotest.GoGitRepo.SetBranch`, and returns the env and
+both commit IDs.
+
+Tests:
+
+- `TestPrNew`: with `--source feature --target trunk`, the PR exists with the
+  feature commit as head and the output matches `^[0-9a-f]{7} created\n$`;
+  with an unknown source it fails with the not-found message.
+- `TestPrList`: two PRs give two lines in creation order.
+- `TestPrShow`: a PR with a comment and a review holding one line comment on
+  `main.go:3` prints the header, the diff line, the review entry and
+  `> line three`.
+- `TestPrShowOutdatedAndMissing`: after `SetHead` to a new commit, the comment
+  is marked `[outdated]` and still shows its line. A line comment pointing at a
+  commit that does not exist in the repository prints the "code not
+  available" note, and the command does not fail.
+
+### Step 6: `pr comment`, `pr review`, `pr head`, `pr status`
+
+Files: create `commands/pr/pr_comment.go`, `pr_review.go`, `pr_head.go`,
+`pr_status.go` and their tests.
+
+- `pr comment ID`: `-m`, `-F`, editor otherwise, reusing
+  `BugCommentEditorInput` and `BugCommentFileInput`.
+- `pr review ID`: `--approve` and `--request-changes` (mutually exclusive),
+  `-m` summary, and a repeatable `--at PATH:LINE:MESSAGE`. The text is split at
+  the first two colons, so the message may contain colons. Every line comment
+  is checked with `readLine` at the PR's current head before anything is
+  written. A failure names the bad `--at` value. It prints
+  `review added to <short id>`.
+- `pr head ID`: `--commit` takes a full commit ID that must exist in the clone
+  (checked with `ReadCommit`). Without it, the head comes from
+  `ResolveBranch(source)`. If the head has not moved, it prints
+  `head unchanged` and writes nothing.
+- `pr status ID STATUS`: `STATUS` is one of `open`, `closed`, `merged`, parsed
+  with `StatusFromString`.
+
+Tests:
+
+- `TestPrComment`: the comment appears in the timeline.
+- `TestPrReview`: an approval with two `--at` values, one with a colon in its
+  message, stores two line comments on the head commit. A `--at` pointing at
+  line 9 of `main.go`, or at a missing file, fails, and the timeline is
+  unchanged.
+- `TestPrHead`: moving the `feature` branch and running `pr head` records the
+  new head; running it again prints `head unchanged`; `--commit abc` fails.
+- `TestPrStatus`: `merged` then `open` both apply; `nope` fails.
+
+### Step 7: generated docs and the feature matrix
+
+Run `go run doc/generate.go` and `go run misc/completion/generate.go` to
+refresh `doc/man`, `doc/md` and the shell completions. In the "Pull-request"
+row of `doc/feature-matrix.md`, set the Core and CLI columns to the partial
+mark used for "Board". Check with `git status` that only generated docs and that row
+changed.
+
+After step 7, the PR description gets a short demo: two clones and a bare
+remote exchanging a PR and a review, as exact commands with their output.
 
 ## Questions for upstream
 
