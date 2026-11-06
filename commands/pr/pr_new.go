@@ -105,6 +105,14 @@ func runPrNew(env *execenv.Env, opts prNewOptions) error {
 
 	env.Out.Printf("%s created\n", pr.Id().Human())
 
+	onRemote, err := env.Backend.PullRequests().BranchOnRemote(env.Ctx, opts.source)
+	if err != nil {
+		return err
+	}
+	if !onRemote {
+		env.Err.Printf("warning: branch %q is not on any remote yet; push it so reviewers can see the code\n", opts.source)
+	}
+
 	return nil
 }
 

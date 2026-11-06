@@ -1,6 +1,7 @@
 package prcmd
 
 import (
+	"fmt"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -27,6 +28,7 @@ func TestPrHead(t *testing.T) {
 	require.NoError(t, runPrHead(env, prHeadOptions{}, args))
 	require.Equal(t, moved, pr.Snapshot().Head)
 	require.Len(t, pr.Snapshot().Timeline, 1)
+	require.Equal(t, fmt.Sprintf("head set to %s (was %s)\n", moved.String()[:7], feature.String()[:7]), env.Out.String())
 	env.Out.Reset()
 
 	require.NoError(t, runPrHead(env, prHeadOptions{}, args))

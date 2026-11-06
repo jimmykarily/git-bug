@@ -1,6 +1,7 @@
 package cache
 
 import (
+	"fmt"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -145,11 +146,17 @@ func TestResolveBranch(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, first, got)
 
-	// the local branch wins over the remotes
+	// a remote at a different commit than the local branch is refused
 	require.NoError(t, repo.UpdateRef(t.Context(), "remotes/origin", "local", "", second))
-	got, err = prs.ResolveBranch(t.Context(), "local")
+	_, err = prs.ResolveBranch(t.Context(), "local")
+	require.EqualError(t, err, fmt.Sprintf("branch \"local\" is at %s locally but at %s on origin; push or update it first", first[:7], second[:7]))
+
+	// a remote at the same commit as the local branch is fine
+	require.NoError(t, repo.SetBranch("synced", second))
+	require.NoError(t, repo.UpdateRef(t.Context(), "remotes/origin", "synced", "", second))
+	got, err = prs.ResolveBranch(t.Context(), "synced")
 	require.NoError(t, err)
-	require.Equal(t, first, got)
+	require.Equal(t, second, got)
 
 	// a branch known only as a remote tracking ref
 	require.NoError(t, repo.UpdateRef(t.Context(), "remotes/origin", "remote-only", "", second))
@@ -171,4 +178,23 @@ func TestResolveBranch(t *testing.T) {
 	require.NoError(t, repo.UpdateRef(t.Context(), "remotes/upstream", "split", "", second))
 	_, err = prs.ResolveBranch(t.Context(), "split")
 	require.EqualError(t, err, `branch "split" points to different commits on remotes origin, upstream`)
+}
+
+func TestBranchOnRemote(t *testing.T) {
+	repo := repotest.NewGoGitRepo(t, false)
+	repotest.AddRemote(t, repo, "origin", "/nowhere/origin")
+	first := storeTestCommit(t, repo)
+
+	cache := createTestRepoCacheNoEvents(t, repo)
+	prs := cache.PullRequests()
+
+	require.NoError(t, repo.SetBranch("local", first))
+	on, err := prs.BranchOnRemote(t.Context(), "local")
+	require.NoError(t, err)
+	require.False(t, on)
+
+	require.NoError(t, repo.UpdateRef(t.Context(), "remotes/origin", "local", "", first))
+	on, err = prs.BranchOnRemote(t.Context(), "local")
+	require.NoError(t, err)
+	require.True(t, on)
 }

@@ -71,5 +71,10 @@ func runPrHead(env *execenv.Env, opts prHeadOptions, args []string) error {
 	if _, err := pr.SetHead(env.Ctx, head); err != nil {
 		return err
 	}
-	return pr.Commit(env.Ctx)
+	if err := pr.Commit(env.Ctx); err != nil {
+		return err
+	}
+
+	env.Out.Printf("head set to %s (was %s)\n", short(head), short(snap.Head))
+	return nil
 }

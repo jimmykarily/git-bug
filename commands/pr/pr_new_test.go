@@ -19,6 +19,7 @@ func TestPrNew(t *testing.T) {
 		})
 		require.NoError(t, err)
 		require.Regexp(t, "^[0-9a-f]{7} created\n$", env.Out.String())
+		require.Equal(t, `warning: branch "feature" is not on any remote yet; push it so reviewers can see the code`+"\n", env.Err.String())
 
 		ids := env.Backend.PullRequests().AllIds()
 		require.Len(t, ids, 1)

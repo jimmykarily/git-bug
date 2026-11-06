@@ -104,21 +104,17 @@ func (c *RepoCachePullRequest) NewRaw(author identity.Interface, unixTime int64,
 	return cached, op, nil
 }
 
-// ResolveBranch returns the commit a branch points to. The local branch is
-// used if it exists, otherwise the branch of the remotes. It fails if the
-// branch is nowhere, or if the remotes disagree.
-func (c *RepoCachePullRequest) ResolveBranch(ctx context.Context, name string) (repository.Hash, error) {
-	hash, err := c.repo.ResolveRef(ctx, "heads", name)
-	if err == nil {
-		return hash, nil
-	}
-	if !errors.Is(err, repository.ErrNotFound) {
-		return "", err
-	}
+type remoteBranch struct {
+	remote string
+	hash   repository.Hash
+}
 
+// remoteBranches returns the remote tracking refs of a branch, sorted by
+// remote name.
+func (c *RepoCachePullRequest) remoteBranches(ctx context.Context, name string) ([]remoteBranch, error) {
 	remotes, err := c.repo.GetRemotes()
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 	names := make([]string, 0, len(remotes))
 	for remote := range remotes {
@@ -126,22 +122,60 @@ func (c *RepoCachePullRequest) ResolveBranch(ctx context.Context, name string) (
 	}
 	slices.Sort(names)
 
-	var found repository.Hash
-	var foundOn []string
-	disagree := false
+	var found []remoteBranch
 	for _, remote := range names {
 		hash, err := c.repo.ResolveRef(ctx, "remotes/"+remote, name)
 		if errors.Is(err, repository.ErrNotFound) {
 			continue
 		}
 		if err != nil {
-			return "", err
+			return nil, err
 		}
-		if found != "" && found != hash {
+		found = append(found, remoteBranch{remote, hash})
+	}
+	return found, nil
+}
+
+// BranchOnRemote tells whether any remote tracking ref exists for the branch.
+func (c *RepoCachePullRequest) BranchOnRemote(ctx context.Context, name string) (bool, error) {
+	found, err := c.remoteBranches(ctx, name)
+	return len(found) > 0, err
+}
+
+// ResolveBranch returns the commit a branch points to. The local branch is
+// used if it exists and every remote that has the branch agrees with it,
+// otherwise the branch of the remotes. It fails if the branch is nowhere, if
+// the local branch differs from a remote, or if the remotes disagree.
+func (c *RepoCachePullRequest) ResolveBranch(ctx context.Context, name string) (repository.Hash, error) {
+	local, err := c.repo.ResolveRef(ctx, "heads", name)
+	if err != nil && !errors.Is(err, repository.ErrNotFound) {
+		return "", err
+	}
+	hasLocal := err == nil
+
+	remotes, err := c.remoteBranches(ctx, name)
+	if err != nil {
+		return "", err
+	}
+
+	if hasLocal {
+		for _, r := range remotes {
+			if r.hash != local {
+				return "", fmt.Errorf("branch %q is at %s locally but at %s on %s; push or update it first", name, local.String()[:7], r.hash.String()[:7], r.remote)
+			}
+		}
+		return local, nil
+	}
+
+	var found repository.Hash
+	var foundOn []string
+	disagree := false
+	for _, r := range remotes {
+		if found != "" && found != r.hash {
 			disagree = true
 		}
-		found = hash
-		foundOn = append(foundOn, remote)
+		found = r.hash
+		foundOn = append(foundOn, r.remote)
 	}
 
 	if disagree {
