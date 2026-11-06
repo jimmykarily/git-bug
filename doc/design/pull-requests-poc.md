@@ -31,7 +31,8 @@ start from something concrete.
   It was meant to prepare the cache and the user interfaces for more kinds of
   records.
 
-The maintainers have expressed different views. The PoC is kept small enough
+Michael Muré supports the idea in #373, while the 2025 closing of #1328 says
+code review does not fit git-bug's plans. The PoC is kept small enough
 to judge in one sitting, and it answers the design questions from #373 with
 working code.
 
@@ -61,7 +62,12 @@ working code.
 ## Things to avoid
 
 - Any change to how bugs work or to how existing commands behave.
-- Any change to the on-disk format of bugs or identities.
+- Any change to the on-disk format of bugs.
+- Any change to the on-disk format of identities. This cannot be fully kept:
+  registering a new record type makes every identity version written
+  afterwards record two more clocks, `pullrequests-create` and
+  `pullrequests-edit`. A git-bug that does not know about PRs refuses to edit
+  such an identity ("version has less lamport clocks than before"). See the questions for upstream.
 - A diff that touches many unrelated files. New code goes in new files; edits
   to existing files are limited to registration points.
 
@@ -141,7 +147,13 @@ of changes made to it ("operations": create, add a comment, change the status,
   way a forge shows them. They are labels, and the head commit ID is what the
   PR actually points at. When the CLI needs a branch's commit, it tries the
   local branch first, then `refs/remotes/<remote>/<name>` for each remote, and
-  fails with a clear message if it finds none or several that disagree.
+  fails with a clear message if it finds none or several that disagree. If the
+  local branch exists and a remote has the same branch at a different commit,
+  it also fails (`branch "x" is at 1234567 locally but at 89abcde on origin;
+  push or update it first`), so a stale local branch cannot silently set the
+  head. `pr new` still works when the source branch is on no remote, but
+  prints a warning that the branch has to be pushed for reviewers to see the
+  code.
 - Who may do what: anyone may record a head or change the status, and any
   status can follow any other, including reopening a merged PR. This matches
   bugs, where anyone may close or reopen, and git-bug has no permission model
@@ -179,7 +191,7 @@ observer switch). Push and fetch loop over every registered cache, so they
 carry PRs with no further change. The merge half of `git bug pull` uses its
 own fixed list in `RepoCache.MergeAll` (`cache/repo_cache_common.go`), and PRs
 are added there after bugs. Without that entry, pull would fetch PRs and never
-show them, with no error. The push and pull test in step 4 guards this.
+show them, with no error. `TestPullRequestPushPull` guards this.
 
 ## CLI
 
@@ -190,10 +202,10 @@ Commands take an ID or a unique ID prefix.
 | --- | --- |
 | `git bug pr` | List PRs: short id, status, title, `source -> target`, author. |
 | `git bug pr new --target BRANCH [--source BRANCH] [-t TITLE] [-m MSG]` | Open a PR. The source defaults to the checked-out branch. The head is the source branch's current commit. |
-| `git bug pr show ID` | Header (title, status, branches, head, author), the message, then the timeline in the order things happened, each entry with its author and date. Line comments print under their review as `path:line @ shortcommit`, followed by that line of code read from the repository, marked `outdated` when the commit is not the current head. If the commit is not in the local clone (for example after a force-push), the comment still prints, with `code not available (commit abc123 not in this clone)` in place of the code. The header also prints the command to see the changes: `git diff TARGET_COMMIT...HEAD_COMMIT`, with the target branch resolved as described under "Data model" and both commits as full IDs. |
+| `git bug pr show ID` | Header (title, status, branches, head, author), the message, then the timeline in operation order (as for bugs), each entry with its author and date. Line comments print under their review as `path:line @ shortcommit`, followed by that line of code read from the repository, marked `outdated` when the commit is not the current head. If the commit is not in the local clone (for example after a force-push), the comment still prints, with `code not available (commit abc123 not in this clone)` in place of the code. The header also prints the command to see the changes: `git diff TARGET_COMMIT...HEAD_COMMIT`, with the target branch resolved as described under "Data model" and both commits as full IDs. |
 | `git bug pr comment ID -m MSG` | Add a general comment. |
-| `git bug pr review ID [--approve \| --request-changes] [-m SUMMARY] [--at PATH:LINE:MESSAGE ...]` | Submit a review. `--at` can be repeated. Line comments are made on the PR's current head. The CLI fails if the file or line does not exist at that commit. |
-| `git bug pr head ID [--commit HASH]` | Record a new head. Defaults to the source branch's current commit. `--commit` takes a full commit ID. Does nothing if the head has not moved. |
+| `git bug pr review ID [--approve \| --request-changes] [-m SUMMARY] [--at PATH:LINE:MESSAGE ...]` | Submit a review. The summary is given with `-m` only; there is no editor. `--at` can be repeated. Line comments are made on the PR's current head. The CLI fails if the file or line does not exist at that commit. |
+| `git bug pr head ID [--commit HASH]` | Record a new head. Defaults to the source branch's current commit. `--commit` takes a full commit ID. Prints `head set to <new> (was <old>)`, or `head unchanged` and does nothing if the head has not moved. |
 | `git bug pr status ID open\|closed\|merged` | Set the status. |
 
 Messages follow the existing conventions where cheap: `-m` for inline, `-F` for
@@ -354,11 +366,16 @@ identities).
     (*PullRequestCache, *pullrequest.CreateOperation, error)`, staged like
     bug creation.
   - `ResolveBranch(ctx, name string) (repository.Hash, error)`: the local
-    `refs/heads/<name>` if present; otherwise every remote's
-    `refs/remotes/<remote>/<name>`. It fails with
+    `refs/heads/<name>` if present and equal to every remote's
+    `refs/remotes/<remote>/<name>`; otherwise only the remotes' refs. It fails
+    with `branch "<name>" is at <short local> locally but at <short remote> on
+    <remote>; push or update it first` when the local branch differs from a
+    remote (the first in sorted order is named), with
     `branch "<name>" not found locally or on any remote` when none exist, and
-    with `branch "<name>" points to different commits on remotes <a>, <b>`
-    when they disagree.
+    `branch "<name>" points to different commits on remotes <a>, <b>` when
+    remote-only branches disagree.
+  - `BranchOnRemote(ctx, name string) (bool, error)`: whether any remote
+    tracking ref exists for the branch. `pr new` uses it for its warning.
 
 Tests:
 
@@ -370,8 +387,10 @@ Tests:
   creates and reviews a PR and pushes; B pulls and sees one PR with the same
   title and review; B comments and pushes; A pulls and sees the comment. This
   test fails if `MergeAll` is not updated.
-- `TestResolveBranch`: a local branch; a branch only under
+- `TestResolveBranch`: a local branch; a local branch that
+  differs from a remote (an error) and one that agrees; a branch only under
   `refs/remotes/origin/`; a missing branch; two remotes that disagree.
+  `TestBranchOnRemote` covers the remote check.
 
 ### Step 5: `git bug pr`, `pr new` and `pr show`
 
@@ -390,7 +409,7 @@ Files: create `commands/pr/pr.go` (the `pr` command and the list),
   The source defaults to the checked-out branch from `BrowseRepo().Head()`,
   and fails with `not on a branch, use --source` otherwise. The head comes
   from `ResolveBranch(source)`. It prints `<short id> created`.
-- `code.go`: `readLine(ctx, browse repository.RepoBrowse, commit
+- `code.go`: `readLine(ctx, repo repository.Repo, commit
   repository.Hash, path string, line int) (string, error)`, which reads the
   file with `BlobAtPath`. It returns `errCommitMissing` when the commit is not
   in the clone (checked first with `ReadCommit`), and `errNoSuchLine` when the
@@ -493,6 +512,9 @@ remote exchanging a PR and a review, as exact commands with their output.
 - Should a PR be a separate record type, as #373 suggests, or an extended bug?
 - Is `refs/pullrequests/` the right namespace name?
 - Is option A acceptable as a first step, with B as the follow-up?
+- How should new record types be introduced without breaking identity edits in
+  older versions? Registering PRs adds two clocks to every identity version
+  written afterwards, and an older git-bug then refuses to edit that identity.
 - What should a bridge map a GitHub or GitLab PR to, so the model above does
   not need a format change later?
 
