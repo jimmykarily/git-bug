@@ -223,6 +223,7 @@ Commands take an ID or a unique ID prefix.
 | `git bug pr new --target BRANCH [--source BRANCH] [-t TITLE] [-m MSG]` | Open a PR. The source defaults to the checked-out branch. The head is the source branch's current commit. It refuses when there is nothing to review: the source and target are the same branch, or the source has no commit the target lacks (same commit, or already merged), and when the two branches share no history. |
 | `git bug pr show ID` | Header (title, status, branches, head, author), the message, then the timeline in operation order (as for bugs), each entry with its author and date. Line comments print under their review as `path:line @ shortcommit` (`path:-line` for a removed line), followed by that line of code, read at the head for added and unchanged lines and at the base for removed lines, and marked `outdated` when the comment's commit is not the current head. If the commit is not in the local clone (for example after a force-push), the comment still prints, with `code not available (commit abc123 not in this clone)` in place of the code. The header also prints `View the changes: git bug pr diff <id>`. |
 | `git bug pr diff ID [--no-comments]` | Print the PR's diff (merge base of target and head, to the head) in unified format, with each line comment printed under the line it is about. Comments that are not on a line of this diff (made on an older head, or with `--at` outside the diff) are listed after it. `--no-comments` prints the plain diff, which `git apply` accepts. |
+| `git bug pr ... --no-colors` | Any `pr` command without colors. Colors are also off when the output is not a terminal or `NO_COLOR` is set. |
 | `git bug pr comment ID -m MSG` | Add a general comment. |
 | `git bug pr review ID [--approve \| --request-changes] [-m SUMMARY] [--at PATH:LINE:MESSAGE ...]` | Submit a review. With neither `-m` nor `--at`, in an interactive session, it opens the editor on the PR's diff (see below). `--at` can be repeated and comments on line LINE of the file at the head, which may be outside the diff. The CLI fails if the file or line does not exist at the head. |
 | `git bug pr head ID [--commit HASH]` | Record a new head. Defaults to the source branch's current commit. `--commit` takes a full commit ID. Prints `head set to <new> (was <old>)`, or `head unchanged` and does nothing if the head has not moved. |
@@ -739,6 +740,40 @@ inline; `--no-comments` output equals the plain diff; the review template
 output is unchanged (`TestReviewTemplate` still passes untouched).
 
 After this step, regenerate `doc/man` and `doc/md`.
+
+### Step 13: colors
+
+Files: modify `commands/pr/pr.go`, `pr_show.go`, `pr_diff.go`, `diff.go` and
+their tests. Colors come from `util/colors`, as in `commands/bug`.
+
+- The same roles get the same colors as in `git bug bug` and `bug show`:
+  IDs cyan, statuses yellow, author names magenta.
+- `pr diff`, as `git diff` colors by default: `diff --git`, mode, rename,
+  `---` and `+++` lines bold; `@@` lines cyan; added lines green; removed
+  lines red; unchanged lines plain. Inline comments: the `┃` bar and the
+  date dimmed or plain, the author magenta, the verdict word colored as
+  below, the message plain.
+- Verdict words, wherever they appear: `approved` green, `requested changes`
+  red, `reviewed` yellow. `[outdated]` and the "code not available" notes
+  dimmed (or plain if `util/colors` has no dim style; adding one there is
+  allowed).
+- `pr show`: the title bold, the ID in `View the changes` cyan, status yellow,
+  author names magenta, the `path:N @ short` line of a line comment cyan, and
+  the quoted code line colored like a diff line of its side (green for a
+  line with a `NewLine` that the comment's diff added, red for a removed
+  line, plain otherwise; if the side is not known, plain).
+- `pr` (the list): ID cyan, status yellow, author magenta, as `git bug bug`.
+- `--no-colors`, a persistent flag on `git bug pr`, turns colors off for every
+  `pr` subcommand. Colors are also off when the output is not a terminal or
+  `NO_COLOR` is set, as `fatih/color` already does, so `pr diff
+  --no-comments | git apply` keeps working.
+- The editor template never has colors.
+- Exact-output tests keep running with colors off (the tests set
+  `color.NoColor`); add tests that force colors on and check the escape
+  codes for one added line, one removed line, a verdict and the list, and a
+  test that `--no-colors` turns them off.
+
+After this step, regenerate `doc/man` and `doc/md` for the new flag.
 
 After the last step, the PR description gets a short demo: two clones and a bare
 remote exchanging a PR and a review, as exact commands with their output.
