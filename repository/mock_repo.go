@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -760,22 +761,116 @@ func (r *mockRepoDataBrowse) CommitFileDiff(ctx context.Context, hash Hash, file
 	if matched == nil {
 		return FileDiff{}, ErrNotFound
 	}
+	return r.fileDiff(fromTreeHash, c.treeHash, *matched), nil
+}
+
+// fileDiff builds the FileDiff of one changed file between two trees. mu must
+// be held.
+func (r *mockRepoDataBrowse) fileDiff(fromTreeHash, toTreeHash Hash, cf ChangedFile) FileDiff {
 	fd := FileDiff{
-		Path:     filePath,
-		IsNew:    matched.Status == ChangeStatusAdded,
-		IsDelete: matched.Status == ChangeStatusDeleted,
+		Path:     cf.Path,
+		IsNew:    cf.Status == ChangeStatusAdded,
+		IsDelete: cf.Status == ChangeStatusDeleted,
 	}
 	var oldContent, newContent []byte
 	if fromTreeHash != "" {
-		if bh, err := r.blobHashAt(fromTreeHash, filePath); err == nil {
+		if bh, err := r.blobHashAt(fromTreeHash, cf.Path); err == nil {
 			oldContent = r.blobs[bh]
 		}
 	}
-	if bh, err := r.blobHashAt(c.treeHash, filePath); err == nil {
+	if bh, err := r.blobHashAt(toTreeHash, cf.Path); err == nil {
 		newContent = r.blobs[bh]
 	}
 	fd.Hunks = mockDiffHunks(oldContent, newContent)
-	return fd, nil
+	return fd
+}
+
+// ancestors returns hash and all of its ancestors. mu must be held.
+func (r *mockRepoDataBrowse) ancestors(hash Hash) map[Hash]bool {
+	seen := make(map[Hash]bool)
+	stack := []Hash{hash}
+	for len(stack) > 0 {
+		h := stack[len(stack)-1]
+		stack = stack[:len(stack)-1]
+		if seen[h] {
+			continue
+		}
+		seen[h] = true
+		if c, ok := r.commits[h]; ok {
+			stack = append(stack, c.parents...)
+		}
+	}
+	return seen
+}
+
+func (r *mockRepoDataBrowse) MergeBase(ctx context.Context, a, b Hash) (Hash, error) {
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
+
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	if _, ok := r.commits[a]; !ok {
+		return "", ErrNotFound
+	}
+	if _, ok := r.commits[b]; !ok {
+		return "", ErrNotFound
+	}
+
+	ancA := r.ancestors(a)
+	common := make(map[Hash]bool)
+	for h := range r.ancestors(b) {
+		if ancA[h] {
+			common[h] = true
+		}
+	}
+	// the best common ancestors are the ones that are not an ancestor of
+	// another common ancestor
+	var best []Hash
+	for h := range common {
+		isBest := true
+		for other := range common {
+			if other != h && r.ancestors(other)[h] {
+				isBest = false
+				break
+			}
+		}
+		if isBest {
+			best = append(best, h)
+		}
+	}
+	if len(best) == 0 {
+		return "", ErrNotFound
+	}
+	sort.Slice(best, func(i, j int) bool { return best[i] < best[j] })
+	return best[0], nil
+}
+
+func (r *mockRepoDataBrowse) DiffCommits(ctx context.Context, from, to Hash) ([]FileDiff, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	fc, ok := r.commits[from]
+	if !ok {
+		return nil, ErrNotFound
+	}
+	tc, ok := r.commits[to]
+	if !ok {
+		return nil, ErrNotFound
+	}
+
+	files := r.diffTrees(fc.treeHash, tc.treeHash, "")
+	diffs := make([]FileDiff, 0, len(files))
+	for _, cf := range files {
+		diffs = append(diffs, r.fileDiff(fc.treeHash, tc.treeHash, cf))
+	}
+	sort.Slice(diffs, func(i, j int) bool { return diffs[i].Path < diffs[j].Path })
+	return diffs, nil
 }
 
 func (r *mockRepoDataBrowse) Head(ctx context.Context) (RefMeta, error) {

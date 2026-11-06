@@ -1137,46 +1137,139 @@ func (repo *GoGitRepo) CommitFileDiff(ctx context.Context, hash Hash, filePath s
 			continue
 		}
 
-		from, to, err := ch.Files()
-		if err != nil {
-			return FileDiff{}, err
-		}
-
-		patch, err := ch.PatchContext(ctx)
-		if errors.Is(err, object.ErrCanceled) {
-			return FileDiff{}, ctx.Err()
-		}
-		if err != nil {
-			return FileDiff{}, err
-		}
-
-		fd := FileDiff{
-			IsNew:    from == nil,
-			IsDelete: to == nil,
-		}
-		if to != nil {
-			fd.Path = to.Name
-		}
-		if from != nil {
-			if fd.Path == "" {
-				fd.Path = from.Name
-			} else if from.Name != fd.Path {
-				op := from.Name
-				fd.OldPath = &op
-			}
-		}
-
-		fps := patch.FilePatches()
-		if len(fps) > 0 {
-			fp := fps[0]
-			fd.IsBinary = fp.IsBinary()
-			if !fd.IsBinary {
-				fd.Hunks = buildDiffHunks(fp)
-			}
-		}
-		return fd, nil
+		return fileDiffFromChange(ctx, ch)
 	}
 	return FileDiff{}, ErrNotFound
+}
+
+// fileDiffFromChange builds the FileDiff of one tree change.
+func fileDiffFromChange(ctx context.Context, ch *object.Change) (FileDiff, error) {
+	from, to, err := ch.Files()
+	if err != nil {
+		return FileDiff{}, err
+	}
+
+	patch, err := ch.PatchContext(ctx)
+	if errors.Is(err, object.ErrCanceled) {
+		return FileDiff{}, ctx.Err()
+	}
+	if err != nil {
+		return FileDiff{}, err
+	}
+
+	fd := FileDiff{
+		IsNew:    from == nil,
+		IsDelete: to == nil,
+	}
+	if to != nil {
+		fd.Path = to.Name
+	}
+	if from != nil {
+		if fd.Path == "" {
+			fd.Path = from.Name
+		} else if from.Name != fd.Path {
+			op := from.Name
+			fd.OldPath = &op
+		}
+	}
+
+	fps := patch.FilePatches()
+	if len(fps) > 0 {
+		fp := fps[0]
+		fd.IsBinary = fp.IsBinary()
+		if !fd.IsBinary {
+			fd.Hunks = buildDiffHunks(fp)
+		}
+	}
+	return fd, nil
+}
+
+// MergeBase returns the best common ancestor of two commits.
+func (repo *GoGitRepo) MergeBase(ctx context.Context, a, b Hash) (Hash, error) {
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
+
+	repo.rMutex.Lock()
+	defer repo.rMutex.Unlock()
+
+	ca, err := repo.r.CommitObject(plumbing.NewHash(a.String()))
+	if errors.Is(err, plumbing.ErrObjectNotFound) {
+		return "", ErrNotFound
+	}
+	if err != nil {
+		return "", err
+	}
+	cb, err := repo.r.CommitObject(plumbing.NewHash(b.String()))
+	if errors.Is(err, plumbing.ErrObjectNotFound) {
+		return "", ErrNotFound
+	}
+	if err != nil {
+		return "", err
+	}
+
+	bases, err := ca.MergeBase(cb)
+	if err != nil {
+		return "", err
+	}
+	if len(bases) == 0 {
+		return "", ErrNotFound
+	}
+	return Hash(bases[0].Hash.String()), nil
+}
+
+// DiffCommits returns one FileDiff per file that differs between the trees of
+// two commits, sorted by path.
+func (repo *GoGitRepo) DiffCommits(ctx context.Context, from, to Hash) ([]FileDiff, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+
+	repo.rMutex.Lock()
+	defer repo.rMutex.Unlock()
+
+	trees := make([]*object.Tree, 2)
+	for i, h := range []Hash{from, to} {
+		c, err := repo.r.CommitObject(plumbing.NewHash(h.String()))
+		if errors.Is(err, plumbing.ErrObjectNotFound) {
+			return nil, ErrNotFound
+		}
+		if err != nil {
+			return nil, err
+		}
+		trees[i], err = c.Tree()
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	changes, err := object.DiffTreeContext(ctx, trees[0], trees[1])
+	if errors.Is(err, object.ErrCanceled) {
+		return nil, ctx.Err()
+	}
+	if err != nil {
+		return nil, err
+	}
+
+	diffs := make([]FileDiff, 0, len(changes))
+	for _, ch := range changes {
+		fd, err := fileDiffFromChange(ctx, ch)
+		if err != nil {
+			return nil, err
+		}
+		// File names from the tree entries are bare names; the change holds
+		// the full paths.
+		fd.Path, fd.OldPath = ch.To.Name, nil
+		if fd.IsDelete {
+			fd.Path = ch.From.Name
+		} else if !fd.IsNew && ch.From.Name != ch.To.Name {
+			op := ch.From.Name
+			fd.OldPath = &op
+		}
+		diffs = append(diffs, fd)
+	}
+	sort.Slice(diffs, func(i, j int) bool { return diffs[i].Path < diffs[j].Path })
+	return diffs, nil
 }
 
 // buildDiffHunks converts a go-git FilePatch into DiffHunks with line numbers

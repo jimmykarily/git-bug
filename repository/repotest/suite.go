@@ -1160,6 +1160,106 @@ func RepoBrowseTest(t *testing.T, repo Repo) {
 		require.ErrorIs(t, err, repository.ErrNotFound)
 	})
 
+	// ── MergeBase ─────────────────────────────────────────────────────────────
+
+	t.Run("MergeBase", func(t *testing.T) {
+		// a sibling of c3: both fork from c2
+		sibling, err := repo.StoreCommit(t.Context(), rootTreeV1, c2)
+		require.NoError(t, err)
+
+		base, err := repo.MergeBase(t.Context(), c3, sibling)
+		require.NoError(t, err)
+		require.Equal(t, c2, base)
+
+		// symmetric
+		base, err = repo.MergeBase(t.Context(), sibling, c3)
+		require.NoError(t, err)
+		require.Equal(t, c2, base)
+
+		// a commit and its descendant
+		base, err = repo.MergeBase(t.Context(), c1, c3)
+		require.NoError(t, err)
+		require.Equal(t, c1, base)
+
+		// the same commit
+		base, err = repo.MergeBase(t.Context(), c2, c2)
+		require.NoError(t, err)
+		require.Equal(t, c2, base)
+
+		// unrelated histories
+		root, err := repo.StoreCommit(t.Context(), rootTreeV3)
+		require.NoError(t, err)
+		_, err = repo.MergeBase(t.Context(), root, c3)
+		require.ErrorIs(t, err, repository.ErrNotFound)
+
+		// unknown hash
+		_, err = repo.MergeBase(t.Context(), randomHash(), c3)
+		require.ErrorIs(t, err, repository.ErrNotFound)
+		_, err = repo.MergeBase(t.Context(), c3, randomHash())
+		require.ErrorIs(t, err, repository.ErrNotFound)
+	})
+
+	// ── DiffCommits ───────────────────────────────────────────────────────────
+
+	t.Run("DiffCommits", func(t *testing.T) {
+		diffs, err := repo.DiffCommits(t.Context(), c1, c2)
+		require.NoError(t, err)
+		require.Len(t, diffs, 2)
+
+		// sorted by path
+		require.Equal(t, "main.go", diffs[0].Path)
+		require.False(t, diffs[0].IsNew)
+		require.False(t, diffs[0].IsDelete)
+		require.Nil(t, diffs[0].OldPath)
+		require.Equal(t, "src/util.go", diffs[1].Path)
+		require.True(t, diffs[1].IsNew)
+
+		type numbered struct {
+			typ              repository.DiffLineType
+			content          string
+			oldLine, newLine int
+		}
+		lines := func(fd repository.FileDiff) []numbered {
+			var out []numbered
+			for _, h := range fd.Hunks {
+				for _, l := range h.Lines {
+					out = append(out, numbered{l.Type, l.Content, l.OldLine, l.NewLine})
+				}
+			}
+			return out
+		}
+
+		got := lines(diffs[0])
+		require.Contains(t, got, numbered{repository.DiffLineContext, "package main", 1, 1})
+		require.Contains(t, got, numbered{repository.DiffLineAdded, "// updated", 0, 3})
+		for _, l := range got {
+			require.NotEqual(t, repository.DiffLineDeleted, l.typ)
+		}
+
+		require.Equal(t, []numbered{
+			{repository.DiffLineAdded, "package util", 0, 1},
+		}, lines(diffs[1]))
+
+		// the other direction deletes the added file
+		rev, err := repo.DiffCommits(t.Context(), c2, c1)
+		require.NoError(t, err)
+		require.Len(t, rev, 2)
+		require.Equal(t, "src/util.go", rev[1].Path)
+		require.True(t, rev[1].IsDelete)
+		require.Contains(t, lines(rev[0]), numbered{repository.DiffLineDeleted, "// updated", 3, 0})
+
+		// no change
+		same, err := repo.DiffCommits(t.Context(), c2, c2)
+		require.NoError(t, err)
+		require.Empty(t, same)
+
+		// unknown hash
+		_, err = repo.DiffCommits(t.Context(), randomHash(), c2)
+		require.ErrorIs(t, err, repository.ErrNotFound)
+		_, err = repo.DiffCommits(t.Context(), c1, randomHash())
+		require.ErrorIs(t, err, repository.ErrNotFound)
+	})
+
 	t.Run("canceled context", func(t *testing.T) {
 		ctx, cancel := context.WithCancel(t.Context())
 		cancel()
@@ -1181,6 +1281,12 @@ func RepoBrowseTest(t *testing.T, repo Repo) {
 		require.ErrorIs(t, err, context.Canceled)
 
 		_, err = repo.CommitFileDiff(ctx, c2, "main.go")
+		require.ErrorIs(t, err, context.Canceled)
+
+		_, err = repo.MergeBase(ctx, c2, c3)
+		require.ErrorIs(t, err, context.Canceled)
+
+		_, err = repo.DiffCommits(ctx, c1, c2)
 		require.ErrorIs(t, err, context.Canceled)
 
 		// a canceled call doesn't fail a concurrent one on the same directory

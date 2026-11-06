@@ -302,6 +302,15 @@ type RepoBrowse interface {
 	// initial commit is diffed against the empty tree.
 	CommitFileDiff(ctx context.Context, hash Hash, filePath string) (FileDiff, error)
 
+	// MergeBase returns the best common ancestor of two commits. Returns
+	// ErrNotFound if either commit is missing or they share no ancestor.
+	MergeBase(ctx context.Context, a, b Hash) (Hash, error)
+
+	// DiffCommits returns one FileDiff per file that differs between the
+	// trees of two commits, sorted by path. Returns ErrNotFound if either
+	// commit is missing.
+	DiffCommits(ctx context.Context, from, to Hash) ([]FileDiff, error)
+
 	// Head returns the commit that HEAD currently points to.
 	// Returns ErrNotFound if HEAD cannot be resolved to a commit, including
 	// for an empty (unborn) repository.
