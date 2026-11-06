@@ -137,3 +137,22 @@ func TestPrShowRemovedLine(t *testing.T) {
 	require.Contains(t, out, "  main.go:-2 @ "+h+"\n  > code not available (commit 1234567 not in this clone)\n  base is gone\n")
 	require.Contains(t, out, "  main.go:-7 @ "+h+"\n  > code not available (no line 7 in main.go)\n  beyond the end\n")
 }
+
+func TestPrShowMultiLineLineComment(t *testing.T) {
+	env, trunk, feature := newTestEnvWithBranches(t)
+	author, err := env.Backend.GetUserIdentity(t.Context())
+	require.NoError(t, err)
+
+	pr, _, err := env.Backend.PullRequests().NewRaw(author, testTime, "my pr", "", "feature", "trunk", feature)
+	require.NoError(t, err)
+	_, err = pr.AddReviewRaw(author, testTime, pullrequest.CommentVerdict, "", []pullrequest.LineComment{
+		{Commit: feature, Base: trunk, Path: "main.go", NewLine: 3, Message: "first paragraph\n\nsecond paragraph"},
+	})
+	require.NoError(t, err)
+	require.NoError(t, pr.Commit(t.Context()))
+
+	require.NoError(t, runPrShow(env, []string{pr.Id().String()}))
+
+	require.Contains(t, env.Out.String(),
+		"  > line three\n  first paragraph\n\n  second paragraph\n")
+}

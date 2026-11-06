@@ -165,7 +165,7 @@ func parseReview(edited string, files []repository.FileDiff) (verdict, summary s
 			case strings.HasPrefix(quoted, "diff --git "), strings.HasPrefix(quoted, "+++ b/"):
 				found := -1
 				for j := range diff {
-					if slicesContainsTrimmed(diff[j].headers, quoted) {
+					if containsTrimmed(diff[j].headers, quoted) {
 						found = j
 						break
 					}
@@ -203,7 +203,7 @@ func parseReview(edited string, files []repository.FileDiff) (verdict, summary s
 			case hunk != nil:
 				return "", "", nil, lineErr("quoted lines inside a hunk must be kept as they are; you may delete whole files, whole hunks, or the end of a hunk")
 
-			case file != nil && slicesContainsTrimmed(file.headers, quoted):
+			case file != nil && containsTrimmed(file.headers, quoted):
 				// another header line of the selected file
 
 			default:
@@ -242,7 +242,7 @@ func trimRight(s string) string {
 	return strings.TrimRight(s, " \t\r")
 }
 
-func slicesContainsTrimmed(lines []string, quoted string) bool {
+func containsTrimmed(lines []string, quoted string) bool {
 	for _, l := range lines {
 		if trimRight(l) == quoted {
 			return true

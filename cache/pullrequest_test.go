@@ -27,7 +27,8 @@ func storeTestCommit(t testing.TB, repo repository.Repo, parents ...repository.H
 
 func TestPullRequestCacheReload(t *testing.T) {
 	repo := repotest.NewGoGitRepo(t, false)
-	head := storeTestCommit(t, repo)
+	base := storeTestCommit(t, repo)
+	head := storeTestCommit(t, repo, base)
 	newHead := storeTestCommit(t, repo, head)
 
 	cache, err := NewRepoCacheNoEvents(repo, nil)
@@ -42,7 +43,7 @@ func TestPullRequestCacheReload(t *testing.T) {
 	_, err = pr.AddComment(t.Context(), "a comment")
 	require.NoError(t, err)
 	_, err = pr.AddReview(t.Context(), pullrequest.ApproveVerdict, "looks good", []pullrequest.LineComment{
-		{Commit: head, Base: newHead, Path: "file", NewLine: 1, Message: "nice"},
+		{Commit: head, Base: base, Path: "file", NewLine: 1, Message: "nice"},
 	})
 	require.NoError(t, err)
 	_, err = pr.SetHead(t.Context(), newHead)

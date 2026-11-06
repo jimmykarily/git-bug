@@ -128,10 +128,9 @@ func runPrReviewEditor(env *execenv.Env, pr *cache.PullRequestCache, verdict pul
 	if err != nil {
 		return err
 	}
-	// No summary and no comment, with the preset verdict or a plain comment,
-	// means the reviewer gave up.
-	if name == "" || (summary == "" && len(targets) == 0 &&
-		(name == verdict.String() || name == pullrequest.CommentVerdict.String())) {
+	// A plain comment with no summary and no line comment means the reviewer
+	// gave up. An approval or a request for changes needs no text.
+	if name == "" || (name == pullrequest.CommentVerdict.String() && summary == "" && len(targets) == 0) {
 		env.Out.Println("Empty review, aborting.")
 		return nil
 	}

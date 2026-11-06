@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"strconv"
+	"strings"
 
 	"github.com/spf13/cobra"
 
@@ -99,7 +100,13 @@ func printLineComment(env *execenv.Env, snap *pullrequest.Snapshot, c pullreques
 	default:
 		env.Out.Printf("  > code not available (%s)\n", err)
 	}
-	env.Out.Printf("  %s\n", c.Message)
+	for _, l := range strings.Split(c.Message, "\n") {
+		if l == "" {
+			env.Out.Printf("\n")
+		} else {
+			env.Out.Printf("  %s\n", l)
+		}
+	}
 }
 
 func entryTitle(author identity.Interface, what string, t timestamp.Timestamp) string {

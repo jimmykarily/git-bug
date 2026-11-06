@@ -94,9 +94,7 @@ func TestPrReviewEditor(t *testing.T) {
 	}{
 		"unchanged template":         {commands: "true"},
 		"only the verdict":           {commands: `echo comment > "$1"`},
-		"unchanged approve template": {opts: prReviewOptions{approve: true}, commands: "true"},
 		"approve changed to comment": {opts: prReviewOptions{approve: true}, commands: `echo comment > "$1"`},
-		"whitespace stripped":        {opts: prReviewOptions{approve: true}, commands: `c=$(sed 's/[ \t]*$//' "$1"); printf '%s' "$c" > "$1"`},
 	} {
 		t.Run(name, func(t *testing.T) {
 			env.Out.Reset()
@@ -107,6 +105,34 @@ func TestPrReviewEditor(t *testing.T) {
 			require.NoError(t, err)
 			require.Equal(t, "Empty review, aborting.\n", env.Out.String())
 			require.Len(t, pr.Snapshot().Timeline, before)
+		})
+	}
+
+	for name, tc := range map[string]struct {
+		opts     prReviewOptions
+		commands string
+		verdict  pullrequest.Verdict
+	}{
+		"unchanged approve template":         {opts: prReviewOptions{approve: true}, commands: "true", verdict: pullrequest.ApproveVerdict},
+		"unchanged request-changes template": {opts: prReviewOptions{requestChanges: true}, commands: "true", verdict: pullrequest.RequestChangesVerdict},
+		"whitespace stripped":                {opts: prReviewOptions{approve: true}, commands: `c=$(sed 's/[ \t]*$//' "$1"); printf '%s' "$c" > "$1"`, verdict: pullrequest.ApproveVerdict},
+	} {
+		t.Run(name, func(t *testing.T) {
+			env.Out.Reset()
+			t.Setenv("GIT_EDITOR", editorScript(t, tc.commands))
+			before := len(pr.Snapshot().Timeline)
+
+			err := runPrReview(env, tc.opts, args)
+			require.NoError(t, err)
+			require.Equal(t, "review added to "+pr.Id().Human()+"\n", env.Out.String())
+
+			snap := pr.Snapshot()
+			require.Len(t, snap.Timeline, before+1)
+			review, ok := snap.Timeline[before].(*pullrequest.ReviewTimelineItem)
+			require.True(t, ok)
+			require.Equal(t, tc.verdict, review.Verdict)
+			require.Empty(t, review.Message)
+			require.Empty(t, review.Comments)
 		})
 	}
 
