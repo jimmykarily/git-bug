@@ -1,0 +1,46 @@
+.nh
+.TH "GIT-BUG" "1" "Apr 2019" "Generated from git-bug's source code" ""
+
+.SH NAME
+git-bug-pr-new - Open a new pull request
+
+
+.SH SYNOPSIS
+\fBgit-bug pr new [flags]\fP
+
+
+.SH DESCRIPTION
+Open a new pull request
+
+
+.SH OPTIONS
+\fB--source\fP=""
+	Branch holding the changes (default: the checked-out branch)
+
+.PP
+\fB--target\fP=""
+	Branch the changes are meant for
+
+.PP
+\fB-t\fP, \fB--title\fP=""
+	Provide a title to describe the pull request
+
+.PP
+\fB-m\fP, \fB--message\fP=""
+	Provide a message to describe the pull request
+
+.PP
+\fB-F\fP, \fB--file\fP=""
+	Take the title and message from the given file (the first line is the title, unless --title is given). Use - to read from the standard input
+
+.PP
+\fB--non-interactive\fP[=false]
+	Do not ask for user input
+
+.PP
+\fB-h\fP, \fB--help\fP[=false]
+	help for new
+
+
+.SH SEE ALSO
+\fBgit-bug-pr(1)\fP

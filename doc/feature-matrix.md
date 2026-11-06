@@ -41,7 +41,7 @@ The most high level overview of what kind of entities are supported and where.
 | Identities     |  ✅  | ✅  |   ✅   |  ✅   |
 | Bug            |  ✅  | ✅  |   ✅   |  ✅   |
 | Board          |  🟠  | 🟠  |   ❌   |  ❌   |
-| Pull-request   |  ❌  | ❌  |   ❌   |  ❌   |
+| Pull-request   |  🟠  | 🟠  |   ❌   |  ❌   |
 | Project Config |  ❌  | ❌  |   ❌   |  ❌   |
 
 More specific features across the board.
