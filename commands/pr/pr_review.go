@@ -106,15 +106,7 @@ func runPrReview(env *execenv.Env, opts prReviewOptions, args []string) error {
 		comments = append(comments, c)
 	}
 
-	if _, err := pr.AddReview(env.Ctx, verdict, text.Cleanup(opts.message), comments); err != nil {
-		return err
-	}
-	if err := pr.Commit(env.Ctx); err != nil {
-		return err
-	}
-
-	env.Out.Printf("review added to %s\n", pr.Id().Human())
-	return nil
+	return submitReview(env, pr, verdict, text.Cleanup(opts.message), comments)
 }
 
 // runPrReviewEditor opens the editor on the diff of the pull request and
@@ -136,7 +128,9 @@ func runPrReviewEditor(env *execenv.Env, pr *cache.PullRequestCache, verdict pul
 	if err != nil {
 		return err
 	}
-	if raw == template || name == "" || (name == pullrequest.CommentVerdict.String() && summary == "" && len(targets) == 0) {
+	// Nothing written beyond the preset verdict, whatever whitespace the
+	// editor changed, means the reviewer gave up.
+	if name == "" || (name == verdict.String() && summary == "" && len(targets) == 0) {
 		env.Out.Println("Empty review, aborting.")
 		return nil
 	}
@@ -155,6 +149,11 @@ func runPrReviewEditor(env *execenv.Env, pr *cache.PullRequestCache, verdict pul
 		})
 	}
 
+	return submitReview(env, pr, verdict, summary, comments)
+}
+
+// submitReview adds the review to the pull request and stores it.
+func submitReview(env *execenv.Env, pr *cache.PullRequestCache, verdict pullrequest.Verdict, summary string, comments []pullrequest.LineComment) error {
 	if _, err := pr.AddReview(env.Ctx, verdict, summary, comments); err != nil {
 		return err
 	}

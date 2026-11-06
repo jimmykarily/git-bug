@@ -88,21 +88,42 @@ func TestPrReviewEditor(t *testing.T) {
 		}, review.Comments)
 	})
 
-	for name, commands := range map[string]string{
-		"unchanged template": "true",
-		"only the verdict":   `echo comment > "$1"`,
+	for name, tc := range map[string]struct {
+		opts     prReviewOptions
+		commands string
+	}{
+		"unchanged template":         {commands: "true"},
+		"only the verdict":           {commands: `echo comment > "$1"`},
+		"unchanged approve template": {opts: prReviewOptions{approve: true}, commands: "true"},
+		"whitespace stripped":        {opts: prReviewOptions{approve: true}, commands: `c=$(sed 's/[ \t]*$//' "$1"); printf '%s' "$c" > "$1"`},
 	} {
 		t.Run(name, func(t *testing.T) {
 			env.Out.Reset()
-			t.Setenv("GIT_EDITOR", editorScript(t, commands))
+			t.Setenv("GIT_EDITOR", editorScript(t, tc.commands))
 			before := len(pr.Snapshot().Timeline)
 
-			err := runPrReview(env, prReviewOptions{}, args)
+			err := runPrReview(env, tc.opts, args)
 			require.NoError(t, err)
 			require.Equal(t, "Empty review, aborting.\n", env.Out.String())
 			require.Len(t, pr.Snapshot().Timeline, before)
 		})
 	}
+
+	t.Run("non-interactive approval", func(t *testing.T) {
+		env.Out.Reset()
+		t.Setenv("GIT_EDITOR", "false")
+
+		err := runPrReview(env, prReviewOptions{approve: true, nonInteractive: true}, args)
+		require.NoError(t, err)
+		require.Equal(t, "review added to "+pr.Id().Human()+"\n", env.Out.String())
+
+		snap := pr.Snapshot()
+		review, ok := snap.Timeline[len(snap.Timeline)-1].(*pullrequest.ReviewTimelineItem)
+		require.True(t, ok)
+		require.Equal(t, pullrequest.ApproveVerdict, review.Verdict)
+		require.Empty(t, review.Message)
+		require.Empty(t, review.Comments)
+	})
 
 	t.Run("invalid review", func(t *testing.T) {
 		t.Setenv("GIT_EDITOR", editorScript(t, `echo lgtm > "$1"`))

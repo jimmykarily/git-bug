@@ -2,6 +2,7 @@ package prcmd
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -82,14 +83,26 @@ func quotedLines(files []repository.FileDiff) []quotedLine {
 
 // parseReview reads the text edited from reviewTemplate. The first line that
 // is not a # comment is the verdict, unquoted text before the diff is the
-// summary, and unquoted text under a quoted diff line is a comment on that
-// line. Each quoted line is matched with the next identical line of the diff
-// computed from files, so the reviewer may delete quoted lines, and a quoted
-// line that is not in files cannot be commented on. The verdict is empty when
-// the text holds nothing but # comments and blank lines.
-func parseReview(text string, files []repository.FileDiff) (verdict, summary string, comments []lineTarget, err error) {
+// summary, and unquoted text under a quoted diff line, up to the next quoted
+// line, is a comment on that line. Each quoted line is matched with the next
+// identical line of the diff computed from files, so the reviewer may delete
+// quoted lines, and a quoted line that is not in files cannot be commented on.
+// The verdict is empty when the text holds nothing but # comments and blank
+// lines.
+func parseReview(edited string, files []repository.FileDiff) (verdict, summary string, comments []lineTarget, err error) {
 	diff := quotedLines(files)
 	next := 0 // index in diff of the first line not matched yet
+
+	// match is a quoted line found in diff at index, with skipped set when
+	// lines of diff before it were deleted by the reviewer.
+	type match struct {
+		lineNumber int
+		index      int
+		skipped    bool
+	}
+	var matches []match
+	// commented holds the position in matches of each comment's quoted line.
+	var commented []int
 
 	const (
 		beforeDiff = iota
@@ -105,19 +118,23 @@ func parseReview(text string, files []repository.FileDiff) (verdict, summary str
 	endComment := func() {
 		if len(message) > 0 {
 			c := *current
-			c.Message = cleanupText(strings.Join(message, "\n"))
+			c.Message = text.Cleanup(strings.Join(message, "\n"))
 			comments = append(comments, c)
+			commented = append(commented, len(matches)-1)
 			message = nil
 		}
 	}
 
-	for i, line := range strings.Split(text, "\n") {
+	for i, line := range strings.Split(edited, "\n") {
 		if strings.HasPrefix(line, "#") {
 			continue
 		}
 		if verdict == "" {
 			if strings.TrimSpace(line) == "" {
 				continue
+			}
+			if strings.HasPrefix(line, ">") {
+				return "", "", nil, errors.New("the first line must be the verdict (comment, approve or request-changes)")
 			}
 			verdict = strings.TrimSpace(line)
 			if _, ok := verdictByName(verdict); !ok {
@@ -132,7 +149,8 @@ func parseReview(text string, files []repository.FileDiff) (verdict, summary str
 			quoted = strings.TrimPrefix(quoted, " ")
 			state = underUnknown
 			for j := next; j < len(diff); j++ {
-				if strings.TrimRight(diff[j].text, " \t\r") == quoted {
+				if trimmed(diff[j]) == quoted {
+					matches = append(matches, match{lineNumber: i + 1, index: j, skipped: j > next})
 					next = j + 1
 					current = diff[j].target
 					state = underHeader
@@ -149,8 +167,12 @@ func parseReview(text string, files []repository.FileDiff) (verdict, summary str
 		case beforeDiff:
 			summaryLines = append(summaryLines, line)
 		case underLine:
+			// Blank lines separate paragraphs of the comment; a run of
+			// them counts as one.
 			if strings.TrimSpace(line) == "" {
-				endComment()
+				if len(message) > 0 && message[len(message)-1] != "" {
+					message = append(message, "")
+				}
 				continue
 			}
 			message = append(message, line)
@@ -166,13 +188,32 @@ func parseReview(text string, files []repository.FileDiff) (verdict, summary str
 	}
 	endComment()
 
-	return verdict, cleanupText(strings.Join(summaryLines, "\n")), comments, nil
+	// After deleted lines, the greedy match is a guess. It is refused when
+	// the same text comes again before the next quoted line's match, since
+	// the reviewer may have meant that later copy.
+	for _, m := range commented {
+		if !matches[m].skipped {
+			continue
+		}
+		end := len(diff)
+		if m+1 < len(matches) {
+			end = matches[m+1].index
+		}
+		at := matches[m].index
+		for j := at + 1; j < end; j++ {
+			if trimmed(diff[j]) == trimmed(diff[at]) {
+				return "", "", nil, fmt.Errorf("line %d: this line appears more than once in the diff; keep its file and hunk header above it", matches[m].lineNumber)
+			}
+		}
+	}
+
+	return verdict, text.Cleanup(strings.Join(summaryLines, "\n")), comments, nil
 }
 
-// cleanupText calls text.Cleanup, which parseReview cannot name because its
-// argument is called text.
-func cleanupText(s string) string {
-	return text.Cleanup(s)
+// trimmed returns the text of l as compared with a quoted line, without the
+// trailing whitespace an editor may strip.
+func trimmed(l quotedLine) string {
+	return strings.TrimRight(l.text, " \t\r")
 }
 
 // verdictByName returns the verdict written as name in the editor.

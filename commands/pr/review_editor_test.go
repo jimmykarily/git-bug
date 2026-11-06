@@ -127,6 +127,15 @@ second line
 		}, comments)
 	})
 
+	t.Run("paragraphs form one comment", func(t *testing.T) {
+		text := "comment\n> +hello\nfirst paragraph\n\n\nsecond paragraph\n\n> +world\n"
+		_, _, comments, err := parseReview(text, files)
+		require.NoError(t, err)
+		require.Equal(t, []lineTarget{
+			{Path: "new.go", NewLine: 1, Message: "first paragraph\n\nsecond paragraph"},
+		}, comments)
+	})
+
 	t.Run("deleted quoted lines", func(t *testing.T) {
 		text := `request-changes
 > -line two
@@ -178,7 +187,7 @@ needs a newline
 		},
 		"missing verdict": {
 			text: "> +hello\nhere\n",
-			err:  `unknown verdict "> +hello", expected comment, approve or request-changes`,
+			err:  "the first line must be the verdict (comment, approve or request-changes)",
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -193,5 +202,45 @@ needs a newline
 		require.Empty(t, verdict)
 		require.Empty(t, summary)
 		require.Empty(t, comments)
+	})
+}
+
+func TestParseReviewRepeatedLine(t *testing.T) {
+	file := func(path, first string) repository.FileDiff {
+		return repository.FileDiff{
+			Path: path,
+			Hunks: []repository.DiffHunk{{OldStart: 1, OldLines: 1, NewStart: 1, NewLines: 2, Lines: []repository.DiffLine{
+				{Type: repository.DiffLineContext, Content: first, OldLine: 1, NewLine: 1},
+				{Type: repository.DiffLineAdded, Content: "\treturn nil", NewLine: 2},
+			}}},
+		}
+	}
+	twoFiles := []repository.FileDiff{file("a.go", "func a() error {"), file("b.go", "func b() error {")}
+
+	t.Run("in two files", func(t *testing.T) {
+		_, _, _, err := parseReview("comment\n> +\treturn nil\nwrap the error\n", twoFiles)
+		require.EqualError(t, err, "line 2: this line appears more than once in the diff; keep its file and hunk header above it")
+	})
+
+	t.Run("in two files with its headers kept", func(t *testing.T) {
+		text := "comment\n> +++ b/b.go\n> @@ -1,1 +1,2 @@\n> +\treturn nil\nwrap the error\n"
+		_, _, comments, err := parseReview(text, twoFiles)
+		require.NoError(t, err)
+		require.Equal(t, []lineTarget{{Path: "b.go", NewLine: 2, Message: "wrap the error"}}, comments)
+	})
+
+	t.Run("in one hunk with the earlier copy deleted", func(t *testing.T) {
+		oneHunk := []repository.FileDiff{{
+			Path: "a.go",
+			Hunks: []repository.DiffHunk{{OldStart: 0, OldLines: 0, NewStart: 1, NewLines: 4, Lines: []repository.DiffLine{
+				{Type: repository.DiffLineAdded, Content: "a", NewLine: 1},
+				{Type: repository.DiffLineAdded, Content: "x", NewLine: 2},
+				{Type: repository.DiffLineAdded, Content: "y", NewLine: 3},
+				{Type: repository.DiffLineAdded, Content: "x", NewLine: 4},
+			}}},
+		}}
+		text := "comment\n> @@ -0,0 +1,4 @@\n> +x\nwhich x\n"
+		_, _, _, err := parseReview(text, oneHunk)
+		require.EqualError(t, err, "line 3: this line appears more than once in the diff; keep its file and hunk header above it")
 	})
 }
