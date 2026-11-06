@@ -1257,15 +1257,13 @@ func (repo *GoGitRepo) DiffCommits(ctx context.Context, from, to Hash) ([]FileDi
 		if err != nil {
 			return nil, err
 		}
-		// File names from the tree entries are bare names; the change holds
-		// the full paths.
-		fd.Path, fd.OldPath = ch.To.Name, nil
-		if fd.IsDelete {
-			fd.Path = ch.From.Name
-		} else if !fd.IsNew && ch.From.Name != ch.To.Name {
-			op := ch.From.Name
-			fd.OldPath = &op
-		}
+		// The names of the tree entries are bare and Files returns nothing
+		// for entries that are not regular files, such as submodules, so the
+		// change is the source of the path and of the added or deleted state.
+		cf := changedFileFromChange(ch.From.Name, ch.To.Name)
+		fd.Path, fd.OldPath = cf.Path, cf.OldPath
+		fd.IsNew = cf.Status == ChangeStatusAdded
+		fd.IsDelete = cf.Status == ChangeStatusDeleted
 		diffs = append(diffs, fd)
 	}
 	sort.Slice(diffs, func(i, j int) bool { return diffs[i].Path < diffs[j].Path })

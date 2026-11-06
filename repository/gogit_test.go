@@ -11,6 +11,8 @@ import (
 
 	"github.com/git-bug/gitconfig"
 	"github.com/go-git/go-git/v5/plumbing"
+	"github.com/go-git/go-git/v5/plumbing/filemode"
+	"github.com/go-git/go-git/v5/plumbing/object"
 	"github.com/stretchr/testify/require"
 )
 
@@ -272,4 +274,42 @@ func TestGoGitRepo_Specifics(t *testing.T) {
 			Hash:      string(commit),
 		}, meta)
 	})
+}
+
+func TestGoGitRepo_DiffCommitsSubmodule(t *testing.T) {
+	repo := newTestGoGitRepo(t, true)
+	ctx := t.Context()
+
+	readme, err := repo.StoreData(ctx, []byte("hello\n"))
+	require.NoError(t, err)
+	base, err := repo.StoreTree(ctx, []TreeEntry{{ObjectType: Blob, Hash: readme, Name: "README.md"}})
+	require.NoError(t, err)
+	c1, err := repo.StoreCommit(ctx, base)
+	require.NoError(t, err)
+
+	// a tree with a gitlink entry, which StoreTree cannot express
+	tree := object.Tree{Entries: []object.TreeEntry{
+		{Name: "README.md", Mode: filemode.Regular, Hash: plumbing.NewHash(readme.String())},
+		{Name: "vendor", Mode: filemode.Submodule, Hash: plumbing.NewHash(strings.Repeat("ab", 20))},
+	}}
+	obj := repo.r.Storer.NewEncodedObject()
+	require.NoError(t, tree.Encode(obj))
+	th, err := repo.r.Storer.SetEncodedObject(obj)
+	require.NoError(t, err)
+	c2, err := repo.StoreCommit(ctx, Hash(th.String()), c1)
+	require.NoError(t, err)
+
+	diffs, err := repo.DiffCommits(ctx, c1, c2)
+	require.NoError(t, err)
+	require.Len(t, diffs, 1)
+	require.Equal(t, "vendor", diffs[0].Path)
+	require.True(t, diffs[0].IsNew)
+	require.False(t, diffs[0].IsDelete)
+
+	diffs, err = repo.DiffCommits(ctx, c2, c1)
+	require.NoError(t, err)
+	require.Len(t, diffs, 1)
+	require.Equal(t, "vendor", diffs[0].Path)
+	require.False(t, diffs[0].IsNew)
+	require.True(t, diffs[0].IsDelete)
 }

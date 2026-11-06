@@ -303,7 +303,9 @@ type RepoBrowse interface {
 	CommitFileDiff(ctx context.Context, hash Hash, filePath string) (FileDiff, error)
 
 	// MergeBase returns the best common ancestor of two commits. Returns
-	// ErrNotFound if either commit is missing or they share no ancestor.
+	// ErrNotFound if either commit is missing or they share no ancestor. When
+	// several best common ancestors exist, which one is returned is
+	// unspecified.
 	MergeBase(ctx context.Context, a, b Hash) (Hash, error)
 
 	// DiffCommits returns one FileDiff per file that differs between the
