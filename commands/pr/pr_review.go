@@ -81,7 +81,11 @@ func runPrReview(env *execenv.Env, opts prReviewOptions, args []string) error {
 		case err != nil:
 			return fmt.Errorf("--at %q: %w", at, err)
 		}
-		c.OldLine = unchangedLine(files, c.Path, c.NewLine)
+		var oldPath *string
+		c.OldLine, oldPath = unchangedLine(files, c.Path, c.NewLine)
+		if oldPath != nil {
+			c.OldPath = *oldPath
+		}
 		comments = append(comments, c)
 	}
 

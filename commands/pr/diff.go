@@ -1,6 +1,10 @@
 package prcmd
 
 import (
+	"errors"
+	"fmt"
+	"io"
+
 	"github.com/git-bug/git-bug/commands/execenv"
 	"github.com/git-bug/git-bug/entities/pullrequest"
 	"github.com/git-bug/git-bug/repository"
@@ -14,6 +18,9 @@ func prDiff(env *execenv.Env, snap *pullrequest.Snapshot) (repository.Hash, []re
 		return "", nil, err
 	}
 	base, err := env.Repo.MergeBase(env.Ctx, target, snap.Head)
+	if errors.Is(err, repository.ErrNotFound) {
+		return "", nil, fmt.Errorf("no merge base between %q and the head %s in this clone", snap.Target, short(snap.Head))
+	}
 	if err != nil {
 		return "", nil, err
 	}
@@ -25,9 +32,10 @@ func prDiff(env *execenv.Env, snap *pullrequest.Snapshot) (repository.Hash, []re
 }
 
 // unchangedLine returns the line number on the old side for a line of the new
-// side of the diff, when that line is an unchanged line shown in a hunk. It
-// returns 0 for any other line.
-func unchangedLine(files []repository.FileDiff, path string, newLine int) int {
+// side of the diff, when that line is an unchanged line shown in a hunk, and
+// the old path of the file when the diff reports it as renamed. It returns 0
+// and nil for any other line.
+func unchangedLine(files []repository.FileDiff, path string, newLine int) (int, *string) {
 	for _, f := range files {
 		if f.Path != path {
 			continue
@@ -35,10 +43,53 @@ func unchangedLine(files []repository.FileDiff, path string, newLine int) int {
 		for _, h := range f.Hunks {
 			for _, l := range h.Lines {
 				if l.Type == repository.DiffLineContext && l.NewLine == newLine {
-					return l.OldLine
+					return l.OldLine, f.OldPath
 				}
 			}
 		}
 	}
-	return 0
+	return 0, nil
+}
+
+// writeUnifiedDiff writes the files in unified diff format, with prefix in
+// front of every line.
+func writeUnifiedDiff(w io.Writer, files []repository.FileDiff, prefix string) {
+	line := func(format string, args ...any) {
+		_, _ = fmt.Fprintf(w, prefix+format+"\n", args...)
+	}
+
+	for _, f := range files {
+		oldPath := f.Path
+		if f.OldPath != nil {
+			oldPath = *f.OldPath
+		}
+		line("diff --git a/%s b/%s", oldPath, f.Path)
+		if f.IsBinary {
+			line("Binary files differ")
+			continue
+		}
+		if f.IsNew {
+			line("--- /dev/null")
+		} else {
+			line("--- a/%s", oldPath)
+		}
+		if f.IsDelete {
+			line("+++ /dev/null")
+		} else {
+			line("+++ b/%s", f.Path)
+		}
+		for _, h := range f.Hunks {
+			line("@@ -%d,%d +%d,%d @@", h.OldStart, h.OldLines, h.NewStart, h.NewLines)
+			for _, l := range h.Lines {
+				marker := " "
+				switch l.Type {
+				case repository.DiffLineAdded:
+					marker = "+"
+				case repository.DiffLineDeleted:
+					marker = "-"
+				}
+				line("%s%s", marker, l.Content)
+			}
+		}
+	}
 }

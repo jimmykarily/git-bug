@@ -38,18 +38,13 @@ func runPrShow(env *execenv.Env, args []string) error {
 	}
 	snap := pr.Snapshot()
 
-	target := snap.Target
-	if hash, err := env.Backend.PullRequests().ResolveBranch(env.Ctx, snap.Target); err == nil {
-		target = hash.String()
-	}
-
 	env.Out.Printf("%s [%s]\n", snap.Title, snap.Status)
 	env.Out.Printf("%s -> %s, head %s\n", snap.Source, snap.Target, short(snap.Head))
 	env.Out.Printf("opened by %s on %s\n", snap.Author.DisplayName(), snap.CreateTime.Format(dateLayout))
 	if !text.Empty(snap.Message) {
 		env.Out.Printf("\n%s\n", snap.Message)
 	}
-	env.Out.Printf("\nView the changes: git diff %s...%s\n", target, snap.Head)
+	env.Out.Printf("\nView the changes: git bug pr diff %s\n", pr.Id().Human())
 
 	for _, item := range snap.Timeline {
 		switch item := item.(type) {

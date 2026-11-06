@@ -41,7 +41,7 @@ opened by John Doe on %[2]s
 
 my message
 
-View the changes: git diff %[3]s...%[4]s
+View the changes: git bug pr diff %[3]s
 
 --- John Doe commented on %[2]s
 a comment
@@ -51,7 +51,7 @@ looks good
   main.go:3 @ %[1]s
   > line three
   nice line
-`, feature.String()[:7], d, trunk, feature)
+`, feature.String()[:7], d, pr.Id().Human())
 	require.Equal(t, expected, env.Out.String())
 }
 
@@ -90,7 +90,7 @@ func TestPrShowOutdatedAndMissing(t *testing.T) {
 }
 
 func TestPrShowEmptyMessage(t *testing.T) {
-	env, trunk, feature := newTestEnvWithBranches(t)
+	env, _, feature := newTestEnvWithBranches(t)
 	author, err := env.Backend.GetUserIdentity(t.Context())
 	require.NoError(t, err)
 
@@ -104,8 +104,8 @@ func TestPrShowEmptyMessage(t *testing.T) {
 feature -> trunk, head %[1]s
 opened by John Doe on %[2]s
 
-View the changes: git diff %[3]s...%[4]s
-`, feature.String()[:7], testDate(), trunk, feature)
+View the changes: git bug pr diff %[3]s
+`, feature.String()[:7], testDate(), pr.Id().Human())
 	require.Equal(t, expected, env.Out.String())
 }
 
