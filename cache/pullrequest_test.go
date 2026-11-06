@@ -42,7 +42,7 @@ func TestPullRequestCacheReload(t *testing.T) {
 	_, err = pr.AddComment(t.Context(), "a comment")
 	require.NoError(t, err)
 	_, err = pr.AddReview(t.Context(), pullrequest.ApproveVerdict, "looks good", []pullrequest.LineComment{
-		{Commit: head, Path: "file", Line: 1, Message: "nice"},
+		{Commit: head, Base: newHead, Path: "file", NewLine: 1, Message: "nice"},
 	})
 	require.NoError(t, err)
 	_, err = pr.SetHead(t.Context(), newHead)

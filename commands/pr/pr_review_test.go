@@ -9,7 +9,7 @@ import (
 )
 
 func TestPrReview(t *testing.T) {
-	env, _, feature := newTestEnvWithBranches(t)
+	env, trunk, feature := newTestEnvWithBranches(t)
 	pr, _, err := env.Backend.PullRequests().New(t.Context(), "my pr", "msg", "feature", "trunk", feature)
 	require.NoError(t, err)
 	require.NoError(t, pr.Commit(t.Context()))
@@ -30,8 +30,8 @@ func TestPrReview(t *testing.T) {
 		require.Equal(t, pullrequest.ApproveVerdict, review.Verdict)
 		require.Equal(t, "looks good", review.Message)
 		require.Equal(t, []pullrequest.LineComment{
-			{Commit: feature, Path: "main.go", Line: 1, Message: "first note"},
-			{Commit: feature, Path: "main.go", Line: 3, Message: "use a colon: here"},
+			{Commit: feature, Base: trunk, Path: "main.go", OldLine: 1, NewLine: 1, Message: "first note"},
+			{Commit: feature, Base: trunk, Path: "main.go", NewLine: 3, Message: "use a colon: here"},
 		}, review.Comments)
 	})
 

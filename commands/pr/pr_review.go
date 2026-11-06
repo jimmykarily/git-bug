@@ -10,6 +10,7 @@ import (
 
 	"github.com/git-bug/git-bug/commands/execenv"
 	"github.com/git-bug/git-bug/entities/pullrequest"
+	"github.com/git-bug/git-bug/repository"
 	"github.com/git-bug/git-bug/util/text"
 )
 
@@ -55,6 +56,15 @@ func runPrReview(env *execenv.Env, opts prReviewOptions, args []string) error {
 	}
 	head := pr.Snapshot().Head
 
+	var base repository.Hash
+	var files []repository.FileDiff
+	if len(opts.at) > 0 {
+		base, files, err = prDiff(env, pr.Snapshot())
+		if err != nil {
+			return fmt.Errorf("computing the diff: %w", err)
+		}
+	}
+
 	comments := make([]pullrequest.LineComment, 0, len(opts.at))
 	for _, at := range opts.at {
 		c, err := parseAt(at)
@@ -62,14 +72,16 @@ func runPrReview(env *execenv.Env, opts prReviewOptions, args []string) error {
 			return err
 		}
 		c.Commit = head
+		c.Base = base
 
-		_, err = readLine(env.Ctx, env.Repo, head, c.Path, c.Line)
+		_, err = readLine(env.Ctx, env.Repo, head, c.Path, c.NewLine)
 		switch {
 		case errors.Is(err, errNoSuchLine):
-			return fmt.Errorf("--at %q: no line %d in %s at the head %s", at, c.Line, c.Path, short(head))
+			return fmt.Errorf("--at %q: no line %d in %s at the head %s", at, c.NewLine, c.Path, short(head))
 		case err != nil:
 			return fmt.Errorf("--at %q: %w", at, err)
 		}
+		c.OldLine = unchangedLine(files, c.Path, c.NewLine)
 		comments = append(comments, c)
 	}
 
@@ -109,5 +121,5 @@ func parseAt(at string) (pullrequest.LineComment, error) {
 	if text.Empty(parts[2]) {
 		return pullrequest.LineComment{}, fmt.Errorf("--at %q: the message is empty", at)
 	}
-	return pullrequest.LineComment{Path: parts[0], Line: line, Message: parts[2]}, nil
+	return pullrequest.LineComment{Path: parts[0], NewLine: line, Message: parts[2]}, nil
 }

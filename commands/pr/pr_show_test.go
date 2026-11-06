@@ -27,7 +27,7 @@ func TestPrShow(t *testing.T) {
 	_, err = pr.AddCommentRaw(author, testTime, "a comment")
 	require.NoError(t, err)
 	_, err = pr.AddReviewRaw(author, testTime, pullrequest.ApproveVerdict, "looks good", []pullrequest.LineComment{
-		{Commit: feature, Path: "main.go", Line: 3, Message: "nice line"},
+		{Commit: feature, Base: trunk, Path: "main.go", NewLine: 3, Message: "nice line"},
 	})
 	require.NoError(t, err)
 	require.NoError(t, pr.Commit(t.Context()))
@@ -56,7 +56,7 @@ looks good
 }
 
 func TestPrShowOutdatedAndMissing(t *testing.T) {
-	env, _, feature := newTestEnvWithBranches(t)
+	env, trunk, feature := newTestEnvWithBranches(t)
 	author, err := env.Backend.GetUserIdentity(t.Context())
 	require.NoError(t, err)
 
@@ -65,9 +65,9 @@ func TestPrShowOutdatedAndMissing(t *testing.T) {
 	pr, _, err := env.Backend.PullRequests().NewRaw(author, testTime, "my pr", "my message", "feature", "trunk", feature)
 	require.NoError(t, err)
 	_, err = pr.AddReviewRaw(author, testTime, pullrequest.RequestChangesVerdict, "", []pullrequest.LineComment{
-		{Commit: feature, Path: "main.go", Line: 3, Message: "old comment"},
-		{Commit: missing, Path: "main.go", Line: 1, Message: "lost comment"},
-		{Commit: feature, Path: "main.go", Line: 9, Message: "beyond the end"},
+		{Commit: feature, Base: trunk, Path: "main.go", NewLine: 3, Message: "old comment"},
+		{Commit: missing, Base: trunk, Path: "main.go", NewLine: 1, Message: "lost comment"},
+		{Commit: feature, Base: trunk, Path: "main.go", NewLine: 9, Message: "beyond the end"},
 	})
 	require.NoError(t, err)
 	newHead := commitMain(t, env, "line one\nline two\nline three\nline four\n", feature)
@@ -107,4 +107,33 @@ opened by John Doe on %[2]s
 View the changes: git diff %[3]s...%[4]s
 `, feature.String()[:7], testDate(), trunk, feature)
 	require.Equal(t, expected, env.Out.String())
+}
+
+func TestPrShowRemovedLine(t *testing.T) {
+	env, trunk, _ := newTestEnvWithBranches(t)
+	author, err := env.Backend.GetUserIdentity(t.Context())
+	require.NoError(t, err)
+
+	head := commitMain(t, env, "line one\n", trunk)
+	missingBase := repository.Hash("1234567890123456789012345678901234567890")
+
+	pr, _, err := env.Backend.PullRequests().NewRaw(author, testTime, "my pr", "", "feature", "trunk", head)
+	require.NoError(t, err)
+	_, err = pr.AddReviewRaw(author, testTime, pullrequest.CommentVerdict, "", []pullrequest.LineComment{
+		{Commit: head, Base: trunk, Path: "main.go", OldLine: 2, Message: "why drop this?"},
+		{Commit: head, Base: trunk, Path: "new.go", OldPath: "main.go", OldLine: 1, Message: "renamed"},
+		{Commit: head, Base: missingBase, Path: "main.go", OldLine: 2, Message: "base is gone"},
+		{Commit: head, Base: trunk, Path: "main.go", OldLine: 7, Message: "beyond the end"},
+	})
+	require.NoError(t, err)
+	require.NoError(t, pr.Commit(t.Context()))
+
+	require.NoError(t, runPrShow(env, []string{pr.Id().String()}))
+
+	out := env.Out.String()
+	h := head.String()[:7]
+	require.Contains(t, out, "  main.go:-2 @ "+h+"\n  > line two\n  why drop this?\n")
+	require.Contains(t, out, "  new.go:-1 @ "+h+"\n  > line one\n  renamed\n")
+	require.Contains(t, out, "  main.go:-2 @ "+h+"\n  > code not available (commit 1234567 not in this clone)\n  base is gone\n")
+	require.Contains(t, out, "  main.go:-7 @ "+h+"\n  > code not available (no line 7 in main.go)\n  beyond the end\n")
 }

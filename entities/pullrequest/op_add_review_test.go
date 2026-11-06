@@ -15,8 +15,8 @@ import (
 func TestAddReviewSerialize(t *testing.T) {
 	dagtest.SerializeRoundTripTest(t, operationUnmarshaler, func(author identity.Interface, unixTime int64) (*AddReviewOperation, entity.Resolvers) {
 		return NewAddReviewOp(author, unixTime, RequestChangesVerdict, "summary", []LineComment{
-			{Commit: testHead, Path: "main.go", Line: 12, Message: "why?"},
-			{Commit: repository.Hash(strings.Repeat("b", 40)), Path: "util.go", Line: 1, Message: "typo"},
+			{Commit: testHead, Base: testBase, Path: "main.go", OldPath: "old.go", OldLine: 11, NewLine: 12, Message: "why?"},
+			{Commit: repository.Hash(strings.Repeat("b", 40)), Base: testBase, Path: "util.go", OldLine: 4, Message: "typo"},
 		}), nil
 	})
 	dagtest.SerializeRoundTripTest(t, operationUnmarshaler, func(author identity.Interface, unixTime int64) (*AddReviewOperation, entity.Resolvers) {
@@ -29,7 +29,7 @@ func TestAddReviewValidate(t *testing.T) {
 	rene, err := identity.NewIdentity(repo, "René Descartes", "rene@descartes.fr")
 	require.NoError(t, err)
 
-	good := LineComment{Commit: testHead, Path: "main.go", Line: 3, Message: "hm"}
+	good := LineComment{Commit: testHead, Base: testBase, Path: "main.go", NewLine: 3, Message: "hm"}
 
 	require.NoError(t, NewAddReviewOp(rene, 1, ApproveVerdict, "", nil).Validate())
 	require.NoError(t, NewAddReviewOp(rene, 1, CommentVerdict, "", []LineComment{good}).Validate())
@@ -40,11 +40,19 @@ func TestAddReviewValidate(t *testing.T) {
 	// an unknown verdict
 	require.Error(t, NewAddReviewOp(rene, 1, Verdict(0), "msg", nil).Validate())
 
+	// a line on the removed side only, and one on both sides
+	require.NoError(t, LineComment{Commit: testHead, Base: testBase, Path: "main.go", OldLine: 2, Message: "hm"}.Validate())
+	require.NoError(t, LineComment{Commit: testHead, Base: testBase, Path: "main.go", OldLine: 2, NewLine: 2, Message: "hm"}.Validate())
+
 	bad := []LineComment{
-		{Commit: testHead, Path: "main.go", Line: 0, Message: "hm"},
-		{Commit: testHead, Path: "", Line: 3, Message: "hm"},
-		{Commit: "abc", Path: "main.go", Line: 3, Message: "hm"},
-		{Commit: testHead, Path: "main.go", Line: 3, Message: ""},
+		{Commit: testHead, Base: testBase, Path: "main.go", Message: "hm"},
+		{Commit: testHead, Base: testBase, Path: "main.go", NewLine: -1, Message: "hm"},
+		{Commit: testHead, Base: testBase, Path: "main.go", OldLine: -1, NewLine: 3, Message: "hm"},
+		{Commit: testHead, Base: testBase, Path: "", NewLine: 3, Message: "hm"},
+		{Commit: "abc", Base: testBase, Path: "main.go", NewLine: 3, Message: "hm"},
+		{Commit: testHead, Base: "abc", Path: "main.go", NewLine: 3, Message: "hm"},
+		{Commit: testHead, Path: "main.go", NewLine: 3, Message: "hm"},
+		{Commit: testHead, Base: testBase, Path: "main.go", NewLine: 3, Message: ""},
 	}
 	for _, c := range bad {
 		require.Error(t, c.Validate())

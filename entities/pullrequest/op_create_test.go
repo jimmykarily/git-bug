@@ -14,6 +14,7 @@ import (
 )
 
 var testHead = repository.Hash(strings.Repeat("a", 40))
+var testBase = repository.Hash(strings.Repeat("c", 40))
 
 func TestCreateSerialize(t *testing.T) {
 	dagtest.SerializeRoundTripTest(t, operationUnmarshaler, func(author identity.Interface, unixTime int64) (*CreateOperation, entity.Resolvers) {

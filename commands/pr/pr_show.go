@@ -3,6 +3,7 @@ package prcmd
 import (
 	"errors"
 	"fmt"
+	"strconv"
 
 	"github.com/spf13/cobra"
 
@@ -78,16 +79,28 @@ func printLineComment(env *execenv.Env, snap *pullrequest.Snapshot, c pullreques
 	if c.Commit != snap.Head {
 		outdated = " [outdated]"
 	}
-	env.Out.Printf("  %s:%d @ %s%s\n", c.Path, c.Line, short(c.Commit), outdated)
 
-	code, err := readLine(env.Ctx, env.Repo, c.Commit, c.Path, c.Line)
+	// A comment with a new line is read at the commit. One with only an old
+	// line is on a removed line, which is read at the base.
+	commit, path, line := c.Commit, c.Path, c.NewLine
+	label := strconv.Itoa(c.NewLine)
+	if c.NewLine == 0 {
+		commit, line = c.Base, c.OldLine
+		if c.OldPath != "" {
+			path = c.OldPath
+		}
+		label = "-" + strconv.Itoa(c.OldLine)
+	}
+	env.Out.Printf("  %s:%s @ %s%s\n", c.Path, label, short(c.Commit), outdated)
+
+	code, err := readLine(env.Ctx, env.Repo, commit, path, line)
 	switch {
 	case err == nil:
 		env.Out.Printf("  > %s\n", code)
 	case errors.Is(err, errCommitMissing):
-		env.Out.Printf("  > code not available (commit %s not in this clone)\n", short(c.Commit))
+		env.Out.Printf("  > code not available (commit %s not in this clone)\n", short(commit))
 	case errors.Is(err, errNoSuchLine):
-		env.Out.Printf("  > code not available (no line %d in %s)\n", c.Line, c.Path)
+		env.Out.Printf("  > code not available (no line %d in %s)\n", line, path)
 	default:
 		env.Out.Printf("  > code not available (%s)\n", err)
 	}

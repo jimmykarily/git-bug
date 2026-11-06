@@ -13,11 +13,20 @@ import (
 
 var _ Operation = &AddReviewOperation{}
 
-// LineComment is a comment on one line of a file, as it is at a given commit
+// LineComment is a comment on one line of a pull request's diff. The diff goes
+// from Base, the merge base of the target and the head, to Commit, the head
+// the comment was made on. NewLine is the line number in the file at Commit and
+// OldLine the one in the file at Base. A comment on a removed line has only an
+// OldLine, a comment on an added line only a NewLine, and a comment on an
+// unchanged line has both. OldPath is the path at Base, set only when the file
+// was renamed.
 type LineComment struct {
 	Commit  repository.Hash `json:"commit"`
+	Base    repository.Hash `json:"base"`
 	Path    string          `json:"path"`
-	Line    int             `json:"line"`
+	OldPath string          `json:"old_path,omitempty"`
+	OldLine int             `json:"old_line"`
+	NewLine int             `json:"new_line"`
 	Message string          `json:"message"`
 }
 
@@ -25,14 +34,23 @@ func (c LineComment) Validate() error {
 	if !c.Commit.IsValid() {
 		return fmt.Errorf("commit is not a valid commit hash")
 	}
+	if !c.Base.IsValid() {
+		return fmt.Errorf("base is not a valid commit hash")
+	}
 	if text.Empty(c.Path) {
 		return fmt.Errorf("path is empty")
 	}
 	if !text.SafeOneLine(c.Path) {
 		return fmt.Errorf("path has unsafe characters")
 	}
-	if c.Line < 1 {
-		return fmt.Errorf("line must be at least 1")
+	if !text.SafeOneLine(c.OldPath) {
+		return fmt.Errorf("old path has unsafe characters")
+	}
+	if c.OldLine < 0 || c.NewLine < 0 {
+		return fmt.Errorf("line numbers cannot be negative")
+	}
+	if c.OldLine == 0 && c.NewLine == 0 {
+		return fmt.Errorf("one of the line numbers must be at least 1")
 	}
 	if text.Empty(c.Message) {
 		return fmt.Errorf("message is empty")

@@ -71,7 +71,7 @@ func TestSnapshotTimeline(t *testing.T) {
 	_, err = AddComment(pr, rene, now, "a comment")
 	require.NoError(t, err)
 	_, err = AddReview(pr, rene, now, RequestChangesVerdict, "please fix", []LineComment{
-		{Commit: testHead, Path: "main.go", Line: 4, Message: "here"},
+		{Commit: testHead, Base: testBase, Path: "main.go", NewLine: 4, Message: "here"},
 	})
 	require.NoError(t, err)
 	_, err = SetHead(pr, rene, now, newHead)
