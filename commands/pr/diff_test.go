@@ -237,10 +237,49 @@ func TestPrDiffSeveralCommentsOnOneLine(t *testing.T) {
 
 	require.NoError(t, runPrDiff(env, prDiffOptions{}, []string{pr.Id().String()}))
 
+	date := time.Unix(testTime, 0).Format("Mon Jan 2 15:04 2006")
+	expected := fmt.Sprintf(`diff --git a/main.go b/main.go
+--- a/main.go
++++ b/main.go
+@@ -1,2 +1,2 @@
+ line one
+    ┃ John Doe, %[1]s (reviewed)
+    ┃ first
+    ┃ John Doe, %[1]s (approved)
+    ┃ second
+-line two
++line 2
+`, date)
+	require.Equal(t, expected, env.Out.String())
+}
+
+func TestPrDiffCommentOnAnotherBase(t *testing.T) {
+	env, pr, _, head, author := newDiffCommentsPr(t)
+	otherBase := commitMain(t, env, "something else\n")
+	_, err := pr.AddReviewRaw(author, testTime, pullrequest.CommentVerdict, "", []pullrequest.LineComment{
+		{Commit: head, Base: otherBase, Path: "main.go", NewLine: 2, Message: "old base"},
+	})
+	require.NoError(t, err)
+	require.NoError(t, pr.Commit(t.Context()))
+
+	require.NoError(t, runPrDiff(env, prDiffOptions{}, []string{pr.Id().String()}))
+
 	out := env.Out.String()
-	require.Contains(t, out, " line one\n    ┃ John Doe, ")
-	require.Contains(t, out, "(reviewed)\n    ┃ first\n    ┃ John Doe, ")
-	require.Contains(t, out, "(approved)\n    ┃ second\n-line two\n")
+	require.Contains(t, out, "+line 2\n\nComments not on a line of this diff:\n")
+	require.Contains(t, out, "(reviewed)\n  main.go:2 @ "+head.String()[:7]+"\n  > line 2\n  old base\n")
+}
+
+func TestDiffCommentOnLineRenamedFile(t *testing.T) {
+	old := "old.go"
+	f := repository.FileDiff{Path: "new.go", OldPath: &old}
+	deleted := repository.DiffLine{Type: repository.DiffLineDeleted, Content: "a", OldLine: 2}
+	head, base := repository.Hash("h"), repository.Hash("b")
+
+	c := diffComment{comment: pullrequest.LineComment{Commit: head, Base: base, Path: "new.go", OldPath: "old.go", OldLine: 2}}
+	require.True(t, c.onLine(head, base, f, deleted))
+
+	c.comment.OldPath = "other.go"
+	require.False(t, c.onLine(head, base, f, deleted))
 }
 
 func TestPrDiffCommentsOutsideTheDiff(t *testing.T) {

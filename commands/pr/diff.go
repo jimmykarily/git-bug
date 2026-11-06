@@ -1,7 +1,6 @@
 package prcmd
 
 import (
-	"bytes"
 	"errors"
 	"fmt"
 	"io"
@@ -148,10 +147,13 @@ func (d diffComment) onLine(head, base repository.Hash, f repository.FileDiff, l
 	return l.Type == repository.DiffLineDeleted && fileOldPath == oldPath && l.OldLine == c.OldLine
 }
 
+// commentIndent is what a comment printed in the diff starts with.
+const commentIndent = "    ┃"
+
 // header returns the line that starts a printed comment: the author, the date
 // and the verdict of its review.
-func (d diffComment) header(prefix string) string {
-	return fmt.Sprintf("%s┃ %s, %s (%s)\n", prefix, d.review.Author.DisplayName(),
+func (d diffComment) header() string {
+	return fmt.Sprintf("%s %s, %s (%s)\n", commentIndent, d.review.Author.DisplayName(),
 		d.review.UnixTime.Time().Format(diffCommentDateLayout), verdictWord(d.review.Verdict))
 }
 
@@ -168,24 +170,22 @@ func printDiffWithComments(env *execenv.Env, snap *pullrequest.Snapshot, base re
 	}
 
 	shown := make([]bool, len(comments))
-	var buf bytes.Buffer
-	writeUnifiedDiff(&buf, files, "", func(f repository.FileDiff, l repository.DiffLine) {
+	writeUnifiedDiff(env.Out, files, "", func(f repository.FileDiff, l repository.DiffLine) {
 		for i, c := range comments {
 			if !c.onLine(snap.Head, base, f, l) {
 				continue
 			}
 			shown[i] = true
-			buf.WriteString(c.header("    "))
+			env.Out.Printf("%s", c.header())
 			for _, m := range strings.Split(c.comment.Message, "\n") {
 				if m == "" {
-					buf.WriteString("    ┃\n")
+					env.Out.Printf("%s\n", commentIndent)
 				} else {
-					buf.WriteString("    ┃ " + m + "\n")
+					env.Out.Printf("%s %s\n", commentIndent, m)
 				}
 			}
 		}
 	})
-	env.Out.Printf("%s", buf.String())
 
 	first := true
 	for i, c := range comments {
@@ -196,7 +196,7 @@ func printDiffWithComments(env *execenv.Env, snap *pullrequest.Snapshot, base re
 			env.Out.Printf("\nComments not on a line of this diff:\n")
 			first = false
 		}
-		env.Out.Printf("%s", c.header("    "))
+		env.Out.Printf("%s", c.header())
 		printLineComment(env, snap, c.comment)
 	}
 }
