@@ -2,6 +2,8 @@ package prcmd
 
 import (
 	"errors"
+	"fmt"
+	"slices"
 
 	"github.com/spf13/cobra"
 
@@ -68,6 +70,11 @@ func runPrNew(env *execenv.Env, opts prNewOptions) error {
 		return err
 	}
 
+	err = checkSomethingToReview(env, opts.source, opts.target, head)
+	if err != nil {
+		return err
+	}
+
 	if opts.messageFile != "" {
 		opts.title, opts.message, err = buginput.BugCreateFileInput(opts.messageFile, opts.title)
 		if err != nil {
@@ -111,6 +118,31 @@ func runPrNew(env *execenv.Env, opts prNewOptions) error {
 	}
 	if !onRemote {
 		env.Err.Printf("warning: branch %q is not on any remote yet; push it so reviewers can see the code\n", opts.source)
+	}
+
+	return nil
+}
+
+// checkSomethingToReview fails when the source holds no commit that the target
+// lacks: the same branch, the same commit under another name, or a source
+// already merged into the target. Finding the target's ancestors walks its
+// whole history, which is slow on very large repositories.
+func checkSomethingToReview(env *execenv.Env, source, target string, head repository.Hash) error {
+	if source == target {
+		return fmt.Errorf("source and target are the same branch %q", source)
+	}
+
+	targetCommit, err := env.Backend.PullRequests().ResolveBranch(env.Ctx, target)
+	if err != nil {
+		return err
+	}
+
+	ancestors, err := env.Repo.ListCommits(env.Ctx, targetCommit)
+	if err != nil {
+		return err
+	}
+	if slices.Contains(ancestors, head) {
+		return fmt.Errorf("nothing to review: %q has no commits that %q does not have", source, target)
 	}
 
 	return nil

@@ -4,6 +4,8 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/require"
+
+	"github.com/git-bug/git-bug/repository/repotest"
 )
 
 func TestPrNew(t *testing.T) {
@@ -31,6 +33,33 @@ func TestPrNew(t *testing.T) {
 		require.Equal(t, "feature", snap.Source)
 		require.Equal(t, "trunk", snap.Target)
 		require.Equal(t, feature, snap.Head)
+	})
+
+	t.Run("nothing to review", func(t *testing.T) {
+		env, trunk, feature := newTestEnvWithBranches(t)
+		repo := env.Repo.(*repotest.GoGitRepo)
+		require.NoError(t, repo.SetBranch("trunk-copy", trunk))
+		require.NoError(t, repo.SetBranch("merged", feature))
+		require.NoError(t, repo.SetBranch("trunk-ahead", commitMain(t, env, "later\n", feature)))
+
+		cases := []struct {
+			name, source, target, err string
+		}{
+			{"same branch", "feature", "feature", `source and target are the same branch "feature"`},
+			{"same commit", "trunk-copy", "trunk", `nothing to review: "trunk-copy" has no commits that "trunk" does not have`},
+			{"already merged", "merged", "trunk-ahead", `nothing to review: "merged" has no commits that "trunk-ahead" does not have`},
+			{"unknown target", "feature", "nope", `branch "nope" not found locally or on any remote`},
+		}
+		for _, c := range cases {
+			err := runPrNew(env, prNewOptions{
+				nonInteractive: true,
+				title:          "my pr",
+				source:         c.source,
+				target:         c.target,
+			})
+			require.EqualError(t, err, c.err, c.name)
+		}
+		require.Empty(t, env.Backend.PullRequests().AllIds())
 	})
 
 	t.Run("unknown source", func(t *testing.T) {
